@@ -1,0 +1,107 @@
+Module 1: Scheduler
+Schedule Management
+Create Task
+Edit Task
+Delete Task
+Mark Task as Completed
+Mark Task as Skipped
+Schedule Setup
+Create Fixed Event
+Create Flexible Task
+Define Task Category
+Define Deadline
+Define Estimated Duration
+Schedule Generation
+Generate Initial Schedule
+Generate Daily Schedule
+Generate Weekly Schedule
+Prevent Time Conflicts
+Allocate Flexible Tasks
+Lock Fixed Tasks
+Estimate Task Duration Automatically
+Save Schedule
+Schedule Interaction
+Display Daily View
+Display Weekly View
+Display Monthly View
+Manually Rearrange Tasks
+-----------------------------------------------------------------------------------------------------------------
+Module 2: Decision Engine:
+
+Decision Score
+Calculate Decision Score
+Rank Tasks
+Select Next Task
+Decision Factors
+Evaluate Deadline
+Evaluate Task Importance
+Evaluate Energy Score
+Evaluate Attention Score
+Evaluate Burnout Risk
+Evaluate Task Duration
+Evaluate Task Type (Fixed/Flexible)
+Evaluate Context
+Recommendation Engine
+Recommend Best Task
+Recommend Best Study Session
+Recommend Break Time
+Recommend Task Postponement
+Explainability
+Explain Scheduling Decisions
+Explain Recommendation Reasons
+
+---------------------------------------------------------------------------------------------------------------
+Module 3: Energy Score:
+
+Energy Analysis
+Calculate Energy Score
+Analyze Sleep Duration
+Analyze Circadian Rhythm
+Analyze Mental Fatigue
+Analyze Daily Activity History
+Productivity Prediction
+Detect Peak Productivity Hours
+Estimate Productivity Level
+Estimate Fatigue Level
+Energy Recommendation
+Recommend Task Intensity
+Recommend Recovery Periods
+Update Energy Score Continuously
+----------------------------------------------------------------------------------------
+Module 4: Attention:
+
+Attention Analysis
+Calculate Attention Score
+Analyze Screen Time
+Analyze Behavioral Logs
+Analyze Task Completion Rate
+Analyze Skip Rate
+Attention Detection
+Detect Attention Drop
+Detect Long Continuous Focus
+Detect Digital Distraction
+Attention Recommendation
+Recommend Focus Session Length
+Recommend Pomodoro Session
+Recommend Break Duration
+Update Attention Score Continuously
+------------------------------------------------------------------------------------------------------
+Module 5: Dynamic Rescheduling:
+
+Change Detection
+Detect New Task
+Detect New Fixed Event
+Detect Deadline Changes
+Detect Missed Tasks
+Detect Schedule Conflicts
+Rescheduling
+Recalculate Schedule
+Preserve Fixed Tasks
+Rearrange Flexible Tasks
+Preserve Completed Tasks
+Minimize Schedule Changes
+Synchronization
+Update Task Order
+Update Notifications
+Apply Schedule Changes
+Request User Confirmation for Major Changes
