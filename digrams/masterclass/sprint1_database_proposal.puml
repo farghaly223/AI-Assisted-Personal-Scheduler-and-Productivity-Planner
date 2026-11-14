@@ -1,0 +1,134 @@
+@startuml
+title Sprint 1 Database Schema - Proposal for Approval
+hide circle
+skinparam linetype ortho
+skinparam shadowing false
+skinparam entityBackgroundColor #F7FAFC
+skinparam entityBorderColor #334155
+left to right direction
+
+entity "auth.users\n(existing; Supabase-managed)" as auth_users <<external>> {
+  * id : uuid <<PK>>
+}
+
+entity "public.profiles" as profiles {
+  * id : uuid <<PK, FK>>
+  --
+  username : varchar(100) <<UNIQUE, nullable>>
+  full_name : varchar(200) <<nullable>>
+  * created_at : timestamptz = now()
+  * updated_at : timestamptz = now()
+}
+
+entity "public.user_preferences" as user_preferences {
+  * preference_id : uuid <<PK>> = gen_random_uuid()
+  --
+  * user_id : uuid <<FK, UNIQUE>>
+  * timezone : varchar(100) = 'UTC'
+  * notifications_enabled : boolean = false
+  preferred_work_start : time(0) <<nullable>>
+  preferred_work_end : time(0) <<nullable>>
+  * updated_at : timestamptz = now()
+}
+
+entity "public.tasks" as tasks {
+  * task_id : uuid <<PK>> = gen_random_uuid()
+  --
+  * user_id : uuid <<FK>>
+  * title : varchar(500)
+  * task_type : varchar(8)
+  deadline : timestamptz <<nullable>>
+  * estimated_duration_minutes : integer
+  * category : varchar(20)
+  * priority : integer
+  fixed_start_at : timestamptz <<conditional>>
+  fixed_end_at : timestamptz <<conditional>>
+  * status : varchar(20) = 'UNSCHEDULED'
+  context : varchar(500) <<nullable>>
+  * created_at : timestamptz = now()
+  * updated_at : timestamptz = now()
+}
+
+entity "public.events" as events {
+  * event_id : uuid <<PK>> = gen_random_uuid()
+  --
+  * user_id : uuid <<FK>>
+  * title : varchar(500)
+  location : varchar(500) <<nullable>>
+  * category : varchar(20)
+  * recurrence_type : varchar(6) = 'ONCE'
+  start_at : timestamptz <<ONCE only>>
+  end_at : timestamptz <<ONCE only>>
+  recurrence_first_date : date <<WEEKLY only>>
+  recurrence_until_date : date <<WEEKLY; nullable>>
+  recurrence_start_time : time(0) <<WEEKLY only>>
+  recurrence_end_time : time(0) <<WEEKLY only>>
+  recurrence_end_day_offset : smallint <<WEEKLY only>>
+  recurrence_timezone : varchar(100) <<WEEKLY only>>
+  * source : varchar(20) = 'MANUAL'
+  * status : varchar(20) = 'SAVED'
+  * created_at : timestamptz = now()
+  * updated_at : timestamptz = now()
+}
+
+auth_users ||--o| profiles : "application profile"
+profiles ||--|| user_preferences : "one preferences row"
+profiles ||--o{ tasks : "owns"
+profiles ||--o{ events : "owns commitments / weekly rules"
+
+note bottom of auth_users
+  External reference only.
+  Do not create or alter auth.users.
+  No application passwords or duplicate email.
+  profiles.id is the authenticated Auth UUID.
+end note
+
+note bottom of user_preferences
+  A public.profiles AFTER INSERT trigger
+  provisions preferences in the same transaction.
+  No trigger on auth.users.
+  Direct child deletion is disallowed.
+  Work times: both NULL or both valid and unequal.
+  End before start means next day.
+  Validate supported IANA timezone names.
+end note
+
+note bottom of tasks
+  FIXED: finite, non-NULL fixed endpoints;
+  fixed_end_at > fixed_start_at.
+  FLEXIBLE: both fixed endpoints NULL.
+  Estimated duration > 0 minutes.
+  Priority / importance: 1..5; 5 is highest.
+  Optional deadline must be finite.
+  Sprint 1 status: UNSCHEDULED only.
+  Constraint times are not allocated slots.
+end note
+
+note bottom of events
+  ONCE: finite start/end, end > start;
+  every recurrence_* field is NULL.
+  WEEKLY: start_at/end_at are NULL;
+  recurrence fields required except until_date.
+  Starts on first_date + 7*n local days, n >= 0.
+  until_date is inclusive for occurrence starts.
+  end_day_offset >= 0; offset 0 requires end > start.
+  Resolve local endpoints in the rule's IANA zone.
+  Do not add 168 UTC hours across DST changes.
+  Proposed DST policy: reject ambiguous/nonexistent
+  endpoints during resolution; do not silently shift.
+  No materialized occurrences or per-date exceptions.
+  Sprint 1 source/status: MANUAL / SAVED only.
+end note
+
+legend bottom
+  * = NOT NULL; conditional fields are enforced by CHECK constraints.
+  All application FKs: ON DELETE CASCADE, ON UPDATE RESTRICT.
+  RLS: profile id / row user_id must match authenticated auth.uid().
+  UPDATE must check both existing and resulting ownership.
+  Categories: STUDY, WORK, PERSONAL, HEALTH, MEETING.
+  No schedules, schedule_items, or automatic Event-to-Task copies.
+  Exact constraints, indexes, policies, and source conflicts are in:
+  plan/Sprint_1_Database_Design_Proposal.md
+  This proposal includes diagram amendments awaiting approval.
+endlegend
+@enduml
