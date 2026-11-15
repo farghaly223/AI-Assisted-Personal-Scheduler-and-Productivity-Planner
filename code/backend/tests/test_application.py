@@ -1,7 +1,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from app.config import ConfigurationError, Settings
+from app.core.config import ConfigurationError, Settings
 from app.main import create_app
 
 

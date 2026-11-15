@@ -7,11 +7,13 @@ import pytest
 import sqlalchemy as sa
 from sqlalchemy.exc import DBAPIError, IntegrityError
 
-from app.auth import AuthenticationError
-from app.db.models import APPLICATION_TABLES, Base, Event, Profile, Task, UserPreferences
-from app.db.registry import managed_table_names
-from app.db.session import Database, UnsafeDatabaseRole
-from app.db.migration_scope import explicit_schema_reflection
+from app.core.security import AuthenticationError
+from app.core.models import APPLICATION_TABLES, Base
+from app.modules.scheduler.models import Event, Task
+from app.modules.user.models import Profile, UserPreferences
+from app.core.registry import managed_table_names
+from app.core.database import Database, UnsafeDatabaseRole
+from app.core.migration_scope import explicit_schema_reflection
 
 pytestmark = pytest.mark.integration
 START = datetime(2026, 11, 16, 9, tzinfo=timezone.utc)

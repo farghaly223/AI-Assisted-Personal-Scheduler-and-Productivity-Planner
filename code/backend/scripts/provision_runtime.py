@@ -11,7 +11,7 @@ import re
 import psycopg
 from psycopg import sql
 
-from app.config import LOCAL_HOSTS, database_url
+from app.core.config import LOCAL_HOSTS, database_url
 
 
 def connect_admin(url, *, autocommit=False):

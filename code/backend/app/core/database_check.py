@@ -1,7 +1,7 @@
-"""Read-only runtime connection/role check: python -m app.db.check."""
+"""Read-only runtime connection/role check: python -m app.core.database_check."""
 
-from app.config import ConfigurationError, Settings
-from app.db.session import Database, create_database_engine
+from app.core.config import ConfigurationError, Settings
+from app.core.database import Database, create_database_engine
 
 
 def main() -> int:

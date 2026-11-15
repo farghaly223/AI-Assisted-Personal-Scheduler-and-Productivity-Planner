@@ -12,10 +12,10 @@ import pytest
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
-from app.auth import AuthenticationError
-from app.config import BACKEND_ROOT, ConfigurationError, require_local, validate_database_url
-from app.db.models import APPLICATION_TABLES, Base
-from app.timezones import resolve_unambiguous_local_time, validate_timezone_name
+from app.core.security import AuthenticationError
+from app.core.config import BACKEND_ROOT, ConfigurationError, require_local, validate_database_url
+from app.core.models import APPLICATION_TABLES, Base
+from app.core.timezones import resolve_unambiguous_local_time, validate_timezone_name
 
 
 def test_verified_subject(signer):
@@ -132,7 +132,7 @@ def test_all_44_columns_match_the_approved_proposal():
 
 def test_unknown_key_ids_do_not_amplify_jwks_network_fetches(signer, monkeypatch):
     import json
-    from app.auth import SupabaseJWTVerifier
+    from app.core.security import SupabaseJWTVerifier
     public = jwt.algorithms.RSAAlgorithm.to_jwk(signer.key.public_key(), as_dict=True)
     public.update(kid="test-key", use="sig", alg="RS256")
     calls = []

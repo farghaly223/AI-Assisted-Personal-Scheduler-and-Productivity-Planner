@@ -8,9 +8,9 @@ import sqlalchemy as sa
 from sqlalchemy.engine import Engine, URL
 from sqlalchemy.orm import Session
 
-from app.auth import SupabaseJWTVerifier
-from app.config import validate_database_url
-from app.db.registry import managed_table_names
+from app.core.security import SupabaseJWTVerifier
+from app.core.config import validate_database_url
+from app.core.registry import managed_table_names
 
 
 class UnsafeDatabaseRole(RuntimeError):

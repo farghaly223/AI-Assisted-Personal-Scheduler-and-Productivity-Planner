@@ -1,6 +1,6 @@
 # Backend architecture
 
-This is the shared Sprint 1 backend. Business tables remain `public.profiles`, `user_preferences`, `tasks`, and `events`; Supabase owns `auth.users`. The initial migration and approved core model definitions are preserved.
+This is the Sprint 1 feature-based modular monolith. User and Scheduler own their routers, services, schemas and models; Core owns shared infrastructure. Business tables remain `public.profiles`, `user_preferences`, `tasks`, and `events`; Supabase owns `auth.users`. The initial migration and approved core model definitions are preserved.
 
 ```mermaid
 flowchart LR
@@ -20,18 +20,24 @@ flowchart LR
 | File/package | Responsibility |
 |---|---|
 | `app/main.py` | Application factory, lifespan cleanup, health endpoints, API registration, security headers, optional CORS |
-| `app/config.py` | Central environment settings and endpoint/credential guards |
-| `app/auth.py` | Signature/issuer/audience/time/subject/role verification using trusted JWKS |
-| `app/dependencies.py` | Shared bearer dependency and function-scoped `SessionDep` |
-| `app/db/models.py` | Single shared Base and four approved core models; external Auth FK reference in separate metadata |
-| `app/db/session.py` | Shared runtime engine, role validation, transaction-local verified identity |
-| `app/db/registry.py` | Module model/router discovery and managed public-table allowlist |
-| `app/routers/` | REST endpoints and typed request/response contracts |
-| `app/services/` | Auth protocol, onboarding, preferences and owner-filtered persistence |
-| `app/schemas.py` | Validation, immutable input fields, response models and pagination |
-| `app/errors.py` / `app/openapi.py` | Error contract and usable API examples |
+| `app/core/config.py` | Central environment settings and endpoint/credential guards |
+| `app/core/security.py` | Signature/issuer/audience/time/subject/role verification using trusted JWKS |
+| `app/core/dependencies.py` | Shared bearer dependency and function-scoped `SessionDep` |
+| `app/core/base.py` / `app/core/models.py` | Single shared Base and eager built-in model discovery |
+| `app/modules/user/models.py` | Profile and UserPreferences; external Auth FK in separate metadata |
+| `app/modules/scheduler/models.py` | Task and Event, using the same shared Base |
+| `app/core/database.py` | Shared runtime engine, role validation, transaction-local verified identity |
+| `app/core/registry.py` | Module model/router discovery and managed public-table allowlist |
+| `app/modules/user/` | Authentication, profiles and preferences routers/services/contracts |
+| `app/modules/scheduler/` | Task and Event routers/services/contracts and pagination |
+| `app/core/schemas.py` | Shared Contract/Patch, validation helpers and error responses |
+| `app/core/errors.py` / `app/core/openapi.py` | Error contract and usable API examples |
 | `alembic/` | One application migration environment and history |
 | `tests/` | Shared disposable database/identity fixtures and API/security tests |
+
+User's `router.py` includes authentication then profiles. Scheduler's `router.py` includes tasks then events. `main.py` registers User then Scheduler under the existing `/api/v1` prefix, followed by configured additional modules. Module aggregators add no extra URL prefix. Built-in User/Scheduler modules do not need `BACKEND_MODULES` entries.
+
+Scheduler models import `Profile` for their existing relationship annotations; User's Task/Event relationships remain string references. `app/core/models.py` loads both modules before shared metadata discovery. No second Base or migration history is introduced.
 
 ## Authentication and transactions
 

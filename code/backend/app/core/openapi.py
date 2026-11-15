@@ -4,7 +4,8 @@ from copy import deepcopy
 
 from fastapi.openapi.utils import get_openapi
 
-from app.schemas import EventUpdate, PreferencesUpdate, TaskUpdate
+from app.modules.scheduler.schemas import EventUpdate, TaskUpdate
+from app.modules.user.schemas import PreferencesUpdate
 
 ID = "00000000-0000-4000-8000-000000000001"
 STAMP = "2026-11-16T08:00:00Z"

@@ -3,11 +3,11 @@ from uuid import UUID
 
 from fastapi import APIRouter, Query, Response
 
-from app.db.models import Task
-from app.dependencies import SessionDep
-from app.errors import APIError, ERROR_RESPONSES
-from app.schemas import Category, Instant, Page, TaskCreate, TaskRead, TaskUpdate
-from app.services.inputs import create_input, list_inputs, own_record, update_input
+from app.modules.scheduler.models import Task
+from app.core.dependencies import SessionDep
+from app.core.errors import APIError, ERROR_RESPONSES
+from app.modules.scheduler.schemas import Category, Instant, Page, TaskCreate, TaskRead, TaskUpdate
+from app.modules.scheduler.services.inputs import create_input, list_inputs, own_record, update_input
 
 router = APIRouter(prefix="/tasks", tags=["Tasks"], responses=ERROR_RESPONSES)
 

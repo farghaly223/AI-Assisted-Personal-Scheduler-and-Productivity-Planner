@@ -4,10 +4,10 @@ from alembic import context
 import sqlalchemy as sa
 from sqlalchemy.pool import NullPool
 
-from app.config import LOCAL_HOSTS, ConfigurationError, database_url
-from app.db.models import Base
-from app.db.registry import configured_modules, load_module_models, managed_table_names
-from app.db.migration_scope import explicit_schema_reflection
+from app.core.config import LOCAL_HOSTS, ConfigurationError, database_url
+from app.core.models import Base
+from app.core.registry import configured_modules, load_module_models, managed_table_names
+from app.core.migration_scope import explicit_schema_reflection
 
 load_module_models(configured_modules())
 APPLICATION_TABLES = managed_table_names()

@@ -12,21 +12,22 @@ from fastapi.testclient import TestClient
 import pytest
 import sqlalchemy as sa
 
-from app.config import BACKEND_ROOT, Settings
-from app.db.models import Base
+from app.core.config import BACKEND_ROOT, Settings
+from app.core.models import Base
 from app.main import create_app
 
 
 def test_temporary_module_reuses_shared_base_sessions_auth_and_migrations(database, signer, users, tmp_path, monkeypatch):
     import app.modules
-    from app.db.registry import load_module_models
+    from app.core.registry import load_module_models
 
     package = tmp_path / "probe"
     package.mkdir()
     (package / "__init__.py").write_text("")
     (package / "models.py").write_text('''import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import UUID
-from app.db.models import Base, owner_fk
+from app.core.models import Base
+from app.core.base import owner_fk
 class Probe(Base):
     __tablename__ = "sprint1_module_probe"
     id = sa.Column(UUID(as_uuid=True), primary_key=True, server_default=sa.text("gen_random_uuid()"))
@@ -35,7 +36,7 @@ class Probe(Base):
 ''')
     (package / "router.py").write_text('''import sqlalchemy as sa
 from fastapi import APIRouter
-from app.dependencies import SessionDep
+from app.core.dependencies import SessionDep
 from .models import Probe
 router = APIRouter(prefix="/probe")
 @router.get("")

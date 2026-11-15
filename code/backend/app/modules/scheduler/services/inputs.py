@@ -3,7 +3,7 @@
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
-from app.errors import APIError
+from app.core.errors import APIError
 
 
 def own_record(session: Session, model, id_column, identifier):

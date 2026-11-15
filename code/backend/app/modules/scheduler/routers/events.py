@@ -3,11 +3,11 @@ from uuid import UUID
 
 from fastapi import APIRouter, Query, Response
 
-from app.db.models import Event
-from app.dependencies import SessionDep
-from app.errors import ERROR_RESPONSES
-from app.schemas import Category, EventCreate, EventRead, EventUpdate, Page
-from app.services.inputs import create_input, list_inputs, own_record, update_input
+from app.modules.scheduler.models import Event
+from app.core.dependencies import SessionDep
+from app.core.errors import ERROR_RESPONSES
+from app.modules.scheduler.schemas import Category, EventCreate, EventRead, EventUpdate, Page
+from app.modules.scheduler.services.inputs import create_input, list_inputs, own_record, update_input
 
 router = APIRouter(prefix="/events", tags=["Events"], responses=ERROR_RESPONSES)
 

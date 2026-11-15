@@ -1,9 +1,9 @@
 from fastapi import APIRouter
 
-from app.dependencies import SessionDep
-from app.errors import ERROR_RESPONSES
-from app.schemas import PreferencesRead, PreferencesUpdate, ProfileRead, ProfileUpdate
-from app.services.profiles import ensure_profile, own_preferences, update_preferences
+from app.core.dependencies import SessionDep
+from app.core.errors import ERROR_RESPONSES
+from app.modules.user.schemas import PreferencesRead, PreferencesUpdate, ProfileRead, ProfileUpdate
+from app.modules.user.services.profiles import ensure_profile, own_preferences, update_preferences
 
 router = APIRouter(tags=["User foundation"], responses=ERROR_RESPONSES)
 

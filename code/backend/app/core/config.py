@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 from dotenv import load_dotenv
 from sqlalchemy.engine import URL, make_url
 
-BACKEND_ROOT = Path(__file__).resolve().parents[1]
+BACKEND_ROOT = Path(__file__).resolve().parents[2]
 LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
 

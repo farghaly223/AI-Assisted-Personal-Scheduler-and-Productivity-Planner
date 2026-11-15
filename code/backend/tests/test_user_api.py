@@ -3,7 +3,7 @@ import json
 import pytest
 import sqlalchemy as sa
 
-from app.db.models import Profile, UserPreferences
+from app.modules.user.models import Profile, UserPreferences
 from tests.api_support import seed_auth_user
 
 

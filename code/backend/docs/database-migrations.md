@@ -58,7 +58,7 @@ No remote Supabase connection or migration was performed. Remote DDL is blocked 
 # Later only, after explicit approval:
 & '.\.venv\Scripts\python.exe' -m alembic -x allow_remote_ddl=true upgrade head
 & '.\.venv\Scripts\python.exe' -m scripts.provision_runtime --role scheduler_runtime --allow-remote
-& '.\.venv\Scripts\python.exe' -m app.db.check
+& '.\.venv\Scripts\python.exe' -m app.core.database_check
 ```
 
 Prefer direct PostgreSQL or verified session-mode pooler port 5432, with verify-full TLS and trusted certificates. Transaction-pooler port 6543 is unsupported. Custom runtime-role support, migration/role-admin privileges, TLS and actual JWT signing configuration must be verified on the target project; never substitute a privileged runtime role to get around a failure. A connection check alone does not prove remote cross-user isolation.

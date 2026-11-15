@@ -1,25 +1,13 @@
-"""Public API contracts. Ownership and server-managed fields are read-only."""
+"""Task and Event API contracts."""
 
-from datetime import date, datetime, time, timedelta, timezone
-from typing import Annotated, ClassVar, Generic, Literal, TypeVar
+from datetime import date, datetime, timedelta, timezone
+from typing import Annotated, Generic, Literal, TypeVar
 from uuid import UUID
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, PrivateAttr, SecretStr, computed_field, field_validator, model_validator
+from pydantic import AfterValidator, Field, computed_field, model_validator
 
-from app.timezones import resolve_unambiguous_local_time, validate_timezone_name
-
-
-def nonblank(value: str) -> str:
-    no_null_character(value)
-    if not value.strip():
-        raise ValueError("Must contain non-whitespace characters")
-    return value
-
-
-def no_null_character(value: str) -> str:
-    if "\x00" in value:
-        raise ValueError("Null characters are not permitted")
-    return value
+from app.core.schemas import Contract, Patch, WallTime, ZoneName, no_null_character, nonblank
+from app.core.timezones import resolve_unambiguous_local_time
 
 
 def instant(value: datetime) -> datetime:
@@ -31,85 +19,28 @@ def instant(value: datetime) -> datetime:
         raise ValueError("Timestamp exceeds supported UTC calendar dates") from None
 
 
-def wall_time(value: time) -> time:
-    if value.tzinfo is not None or value.microsecond:
-        raise ValueError("Use local time with whole seconds and no UTC offset")
-    return value
-
-
 Title = Annotated[str, Field(max_length=500), AfterValidator(nonblank)]
+
+
 Category = Literal["STUDY", "WORK", "PERSONAL", "HEALTH", "MEETING"]
+
+
 Priority = Annotated[int, Field(strict=True, ge=1, le=5)]
+
+
 Duration = Annotated[int, Field(strict=True, ge=1, le=2147483647)]
+
+
 Instant = Annotated[datetime, AfterValidator(instant)]
-WallTime = Annotated[time, AfterValidator(wall_time)]
-ZoneName = Annotated[str, Field(max_length=100), AfterValidator(validate_timezone_name)]
+
+
 Text = Annotated[str, Field(max_length=500), AfterValidator(no_null_character)]
-Username = Annotated[str, Field(max_length=100), AfterValidator(nonblank)]
-FullName = Annotated[str, Field(max_length=200), AfterValidator(nonblank)]
+
+
 DayOffset = Annotated[int, Field(strict=True, ge=0, le=32767)]
+
+
 Weekday = Annotated[int, Field(strict=True, ge=1, le=7)]
-
-
-class Contract(BaseModel):
-    model_config = ConfigDict(extra="forbid", from_attributes=True)
-
-
-class Patch(Contract):
-    required_values: ClassVar[frozenset[str]] = frozenset()
-
-    @model_validator(mode="before")
-    @classmethod
-    def reject_required_nulls(cls, data):
-        if isinstance(data, dict) and any(key in data and data[key] is None for key in cls.required_values):
-            raise ValueError("Required values cannot be null")
-        return data
-
-
-class ProfileUpdate(Patch):
-    username: Username | None = None
-    full_name: FullName | None = None
-
-    @field_validator("username")
-    @classmethod
-    def username_not_padded(cls, value):
-        if value is not None and value != value.strip():
-            raise ValueError("Username must not have leading or trailing whitespace")
-        return value
-
-
-class ProfileRead(ProfileUpdate):
-    id: UUID
-    created_at: datetime
-    updated_at: datetime
-
-
-class PreferencesUpdate(Patch):
-    required_values = frozenset({"timezone", "notifications_enabled"})
-    timezone: ZoneName | None = None
-    notifications_enabled: Annotated[bool, Field(strict=True)] | None = None
-    preferred_work_start: WallTime | None = None
-    preferred_work_end: WallTime | None = None
-
-
-class PreferencesValues(Contract):
-    timezone: ZoneName = "UTC"
-    notifications_enabled: Annotated[bool, Field(strict=True)] = False
-    preferred_work_start: WallTime | None = None
-    preferred_work_end: WallTime | None = None
-
-    @model_validator(mode="after")
-    def paired_hours(self):
-        start, end = self.preferred_work_start, self.preferred_work_end
-        if (start is None) != (end is None) or (start is not None and start == end):
-            raise ValueError("Work hours must both be null or both supplied and unequal")
-        return self
-
-
-class PreferencesRead(PreferencesValues):
-    preference_id: UUID
-    user_id: UUID
-    updated_at: datetime
 
 
 class TaskCreate(Contract):
@@ -251,84 +182,3 @@ class Page(Contract, Generic[Item]):
     limit: int
     offset: int
     has_more: bool
-
-
-EmailAddress = Annotated[str, Field(min_length=3, max_length=320, pattern=r"^[^\s@]+@[^\s@]+\.[^\s@]+$")]
-
-
-class LoginRequest(Contract):
-    email: EmailAddress
-    password: SecretStr = Field(min_length=1, max_length=1024)
-
-
-class RegisterRequest(LoginRequest):
-    password: SecretStr = Field(min_length=8, max_length=1024)
-    username: Username | None = None
-    full_name: FullName | None = None
-
-    @field_validator("username")
-    @classmethod
-    def username_not_padded(cls, value):
-        return ProfileUpdate.username_not_padded(value)
-
-
-class ResendSignupCodeRequest(Contract):
-    email: EmailAddress
-
-
-class ResendSignupCodeResponse(Contract):
-    status: Literal["accepted"] = "accepted"
-    message: str = "If this email has an unconfirmed account, a verification code will be sent."
-
-
-class SignupVerificationRequest(Contract):
-    email: EmailAddress
-    token: SecretStr = Field(min_length=6, max_length=6,
-        description="Exactly six ASCII digits, sent as a string to preserve leading zeros.")
-
-    @field_validator("token")
-    @classmethod
-    def six_digit_token(cls, value):
-        code = value.get_secret_value()
-        if not code.isascii() or not code.isdigit():
-            raise ValueError("Verification code must contain exactly six ASCII digits")
-        return value
-
-
-class RefreshRequest(Contract):
-    refresh_token: SecretStr = Field(min_length=1, max_length=4096)
-
-
-class AuthUser(Contract):
-    id: UUID
-    email: str | None = None
-
-
-class TokenSession(Contract):
-    access_token: Annotated[str, Field(min_length=1, max_length=32768)]
-    refresh_token: Annotated[str, Field(min_length=1, max_length=4096)]
-    token_type: Literal["bearer"] = "bearer"
-    expires_in: Annotated[int, Field(strict=True, gt=0)]
-    expires_at: int | None = None
-
-
-class AuthResponse(Contract):
-    user: AuthUser
-    session: TokenSession | None = None
-    confirmation_required: bool = False
-    _profile_values: dict[str, str | None] = PrivateAttr(default_factory=dict)
-
-
-class ErrorDetail(Contract):
-    field: str
-    message: str
-
-
-class ErrorBody(Contract):
-    code: str
-    message: str
-    details: list[ErrorDetail] = Field(default_factory=list)
-
-
-class ErrorResponse(Contract):
-    error: ErrorBody

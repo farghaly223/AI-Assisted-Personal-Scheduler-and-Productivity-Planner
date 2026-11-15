@@ -1,11 +1,11 @@
 from fastapi import APIRouter, Request
 
-from app.auth import AuthenticationError
-from app.dependencies import get_database, get_verifier
-from app.errors import APIError, ERROR_RESPONSES
-from app.schemas import AuthResponse, LoginRequest, RefreshRequest, RegisterRequest, ResendSignupCodeRequest, ResendSignupCodeResponse, SignupVerificationRequest
-from app.services.authentication import SupabaseAuthService
-from app.services.profiles import ensure_profile
+from app.core.security import AuthenticationError
+from app.core.dependencies import get_database, get_verifier
+from app.core.errors import APIError, ERROR_RESPONSES
+from app.modules.user.schemas import AuthResponse, LoginRequest, RefreshRequest, RegisterRequest, ResendSignupCodeRequest, ResendSignupCodeResponse, SignupVerificationRequest
+from app.modules.user.services.authentication import SupabaseAuthService
+from app.modules.user.services.profiles import ensure_profile
 
 router = APIRouter(prefix="/auth", tags=["Authentication"], responses=ERROR_RESPONSES)
 

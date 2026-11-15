@@ -11,7 +11,7 @@ import secrets
 from psycopg import sql
 from sqlalchemy.engine import URL
 
-from app.config import BACKEND_ROOT, require_local
+from app.core.config import BACKEND_ROOT, require_local
 from scripts.provision_runtime import connect_admin, create_restricted_role
 
 

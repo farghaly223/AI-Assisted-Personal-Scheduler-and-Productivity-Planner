@@ -5,9 +5,9 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
-from app.db.models import Profile, UserPreferences
-from app.errors import APIError
-from app.schemas import PreferencesValues
+from app.modules.user.models import Profile, UserPreferences
+from app.core.errors import APIError
+from app.modules.user.schemas import PreferencesValues
 
 
 def ensure_profile(session: Session, *, username=None, full_name=None) -> Profile:

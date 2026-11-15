@@ -29,7 +29,7 @@ For a fresh checkout with no .env/cluster:
 & '.\.venv\Scripts\python.exe' -m scripts.local_postgres start
 & '.\.venv\Scripts\python.exe' -m scripts.local_database
 & '.\.venv\Scripts\python.exe' -m alembic upgrade head
-& '.\.venv\Scripts\python.exe' -m app.db.check
+& '.\.venv\Scripts\python.exe' -m app.core.database_check
 & '.\.venv\Scripts\python.exe' -m alembic check
 & '.\.venv\Scripts\python.exe' -m pytest -q
 & '.\.venv\Scripts\python.exe' -m uvicorn app.main:app --host 127.0.0.1 --port 8000
@@ -79,7 +79,7 @@ $env:MIGRATION_DATABASE_URL = 'postgresql+psycopg://postgres:REPLACE_LOCAL_DB_PA
 & '.\.venv\Scripts\python.exe' -m scripts.provision_runtime --role scheduler_runtime
 # Use the new password entered at the hidden provisioning prompt; URL-encode it.
 $env:DATABASE_URL = 'postgresql+psycopg://scheduler_runtime:REPLACE_LOCAL_RUNTIME_PASSWORD@127.0.0.1:54322/postgres'
-& '.\.venv\Scripts\python.exe' -m app.db.check
+& '.\.venv\Scripts\python.exe' -m app.core.database_check
 & '.\.venv\Scripts\python.exe' -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 

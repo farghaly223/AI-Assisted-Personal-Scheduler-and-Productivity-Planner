@@ -1,7 +1,7 @@
 import pytest
 import sqlalchemy as sa
 
-from app.db.models import Event, Task
+from app.modules.scheduler.models import Event, Task
 from tests.test_api_schemas import ONCE, TASK, WEEKLY
 
 

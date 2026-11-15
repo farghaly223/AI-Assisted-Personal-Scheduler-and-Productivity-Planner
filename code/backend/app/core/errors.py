@@ -9,10 +9,10 @@ from pydantic import ValidationError
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from starlette.exceptions import HTTPException
 
-from app.auth import AuthenticationError
-from app.config import ConfigurationError
-from app.db.session import UnsafeDatabaseRole
-from app.schemas import ErrorResponse
+from app.core.security import AuthenticationError
+from app.core.config import ConfigurationError
+from app.core.database import UnsafeDatabaseRole
+from app.core.schemas import ErrorResponse
 
 
 class APIError(Exception):

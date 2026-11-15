@@ -17,10 +17,10 @@ import pytest
 import sqlalchemy as sa
 from sqlalchemy.engine import URL
 
-from app.auth import SupabaseJWTVerifier
-from app.config import BACKEND_ROOT, require_local, validate_database_url
-from app.db.models import Profile
-from app.db.session import Database, create_database_engine
+from app.core.security import SupabaseJWTVerifier
+from app.core.config import BACKEND_ROOT, require_local, validate_database_url
+from app.modules.user.models import Profile
+from app.core.database import Database, create_database_engine
 from scripts.provision_runtime import connect_admin, create_restricted_role
 
 from tests.api_support import api

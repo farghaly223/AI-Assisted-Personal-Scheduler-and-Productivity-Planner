@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 
 @pytest.fixture
 def api(database, signer, users):
-    from app.config import Settings
+    from app.core.config import Settings
     from app.main import create_app
 
     state = SimpleNamespace(mode="session", status=None, requests=[], subject=users[0], metadata={"full_name": "Student"})

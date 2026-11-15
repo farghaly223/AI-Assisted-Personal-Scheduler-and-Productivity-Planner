@@ -2,6 +2,14 @@
 
 Create only your module-owned files and tests. Reuse the shared foundation; never create another Base, engine, authentication system, Alembic environment, or users/tasks/events copy.
 
+## Existing module ownership
+
+- User: `app/modules/user/` owns Auth endpoints/services, profiles, preferences, schemas and models.
+- Scheduler: `app/modules/scheduler/` owns Task/Event endpoints, input services, schemas and models.
+- Core: `app/core/` owns JWT verification, sessions, Base, configuration, shared contracts and errors.
+
+Within an existing module, add a child router to that module's `router.py`. Keep its current URL prefixes. User and Scheduler are registered explicitly in `main.py`; do not add them to `BACKEND_MODULES`, which remains the extension mechanism for additional modules. A larger module can use `routers/` and `services/` folders like the existing modules; a small new module can keep the simple layout below.
+
 ## Exact files
 
 ```text
@@ -15,7 +23,7 @@ tests/test_<module>.py
 alembic/versions/<shared_revision>_<module>.py
 ```
 
-Do not edit `app/main.py`, `app/config.py`, `app/auth.py`, `app/dependencies.py`, `app/db/session.py`, `app/db/models.py`, `app/db/registry.py`, `alembic.ini`, `alembic/env.py`, or the existing initial migration to register a module. Configure your ignored environment instead:
+Do not edit `app/main.py`, `app/core/config.py`, `app/core/security.py`, `app/core/dependencies.py`, `app/core/database.py`, `app/core/base.py`, `app/core/models.py`, `app/core/registry.py`, `alembic.ini`, `alembic/env.py`, or the existing initial migration to register a module. Configure your ignored environment instead:
 
 ```dotenv
 BACKEND_MODULES=app.modules.your_module
@@ -39,7 +47,7 @@ foreach ($taskModuleFile in @('__init__.py','models.py','schemas.py','service.py
 ```python
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import UUID
-from app.db.models import Base, owner_fk
+from app.core.base import Base, owner_fk
 
 class ModuleRecord(Base):
     __tablename__ = 'your_module_records'
@@ -56,8 +64,8 @@ Public schema is inherited from Base. Every registered module table requires non
 
 ```python
 from fastapi import APIRouter
-from app.dependencies import SessionDep
-from app.errors import ERROR_RESPONSES
+from app.core.dependencies import SessionDep
+from app.core.errors import ERROR_RESPONSES
 
 router = APIRouter(prefix='/your-module', tags=['Your module'],
                    responses=ERROR_RESPONSES)

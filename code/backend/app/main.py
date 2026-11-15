@@ -7,14 +7,15 @@ import httpx
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.auth import SupabaseJWTVerifier
-from app.config import Settings
-from app.db.session import Database, create_database_engine
-from app.db.registry import module_routers
-from app.dependencies import get_database
-from app.errors import ERROR_RESPONSES, install_error_handlers
-from app.routers import api_router
-from app.openapi import build_openapi
+from app.core.security import SupabaseJWTVerifier
+from app.core.config import Settings
+from app.core.database import Database, create_database_engine
+from app.core.registry import module_routers
+from app.core.dependencies import get_database
+from app.core.errors import ERROR_RESPONSES, install_error_handlers
+from app.modules.user.router import router as user_router
+from app.modules.scheduler.router import router as scheduler_router
+from app.core.openapi import build_openapi
 
 
 def create_app(*, settings: Settings | None = None, database: Database | None = None,
@@ -75,7 +76,8 @@ def create_app(*, settings: Settings | None = None, database: Database | None = 
         get_database(request).check_connection()
         return {"status": "ready"}
 
-    application.include_router(api_router, prefix="/api/v1")
+    application.include_router(user_router, prefix="/api/v1")
+    application.include_router(scheduler_router, prefix="/api/v1")
     for router in extra_routers:
         application.include_router(router, prefix="/api/v1")
     application.openapi = lambda: build_openapi(application)

@@ -7,9 +7,9 @@ from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
-from app.auth import AuthenticationError, SupabaseJWTVerifier
-from app.db.session import Database
-from app.config import ConfigurationError
+from app.core.security import AuthenticationError, SupabaseJWTVerifier
+from app.core.database import Database
+from app.core.config import ConfigurationError
 
 bearer = HTTPBearer(auto_error=False, description="Supabase access token returned by login or refresh")
 

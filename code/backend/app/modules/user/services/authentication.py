@@ -3,9 +3,9 @@
 import httpx
 from pydantic import ValidationError
 
-from app.config import ConfigurationError, Settings
-from app.errors import APIError
-from app.schemas import AuthResponse, AuthUser, ProfileUpdate, ResendSignupCodeResponse, TokenSession
+from app.core.config import ConfigurationError, Settings
+from app.core.errors import APIError
+from app.modules.user.schemas import AuthResponse, AuthUser, ProfileUpdate, ResendSignupCodeResponse, TokenSession
 
 
 class SupabaseAuthService:

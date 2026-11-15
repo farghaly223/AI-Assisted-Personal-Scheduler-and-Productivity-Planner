@@ -1,6 +1,6 @@
 # Manual backend testing guide
 
-This guide is for you to run manually using PowerShell, a browser, and Swagger UI. Its source is the existing [OpenAPI export](../code/backend/docs/openapi.json), [API reference](../code/backend/docs/api-reference.md), and request/response schemas in `code/backend/app/schemas.py`. Creating this guide does not run any of these commands or requests.
+This guide is for you to run manually using PowerShell, a browser, and Swagger UI. Its source is the existing [OpenAPI export](../code/backend/docs/openapi.json), [API reference](../code/backend/docs/api-reference.md), and request/response schemas in `code/backend/app/modules/user/schemas.py`, `code/backend/app/modules/scheduler/schemas.py`, and `code/backend/app/core/schemas.py`. Creating this guide does not run any of these commands or requests.
 
 All example emails, passwords, tokens, UUIDs, connection details, and timestamps are illustrative. Replace them privately when needed. Never send passwords, database connection strings containing passwords, refresh/access tokens, or private signing keys in chat.
 
@@ -86,7 +86,7 @@ For remote PostgreSQL, the implementation requires `sslmode=verify-full` and a t
 Before running the following yourself, privately confirm `DATABASE_URL` targets `127.0.0.1`, `localhost`, or `::1`. This section is for the existing local database, not a hosted Supabase connection.
 
 ```powershell
-& '.\.venv\Scripts\python.exe' -m app.db.check
+& '.\.venv\Scripts\python.exe' -m app.core.database_check
 ```
 
 Expected successful output:
@@ -112,7 +112,7 @@ If the script fails but the connectivity command succeeds, the database is reach
 In the backend PowerShell terminal:
 
 ```powershell
-& '.\.venv\Scripts\python.exe' -m app.db.check& '.\.venv\Scripts\python.exe' -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+& '.\.venv\Scripts\python.exe' -m app.core.database_check& '.\.venv\Scripts\python.exe' -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
 Leave that terminal open. Expected startup includes `Application startup complete` and the listening address. If port 8000 is occupied, choose another unused port and substitute it throughout the guide.

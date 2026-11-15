@@ -3,7 +3,8 @@ from datetime import datetime, timezone
 import pytest
 from pydantic import ValidationError
 
-from app.schemas import EventCreate, PreferencesUpdate, TaskCreate, TaskUpdate
+from app.modules.scheduler.schemas import EventCreate, TaskCreate, TaskUpdate
+from app.modules.user.schemas import PreferencesUpdate
 
 
 TASK = dict(title="Assignment", task_type="FLEXIBLE", estimated_duration_minutes=30,

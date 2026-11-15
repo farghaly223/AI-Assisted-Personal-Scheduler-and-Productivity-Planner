@@ -11,7 +11,7 @@ from pathlib import Path
 import secrets
 import subprocess
 
-from app.config import BACKEND_ROOT
+from app.core.config import BACKEND_ROOT
 
 ROOT = BACKEND_ROOT / ".local"
 DATA = ROOT / "pgdata"

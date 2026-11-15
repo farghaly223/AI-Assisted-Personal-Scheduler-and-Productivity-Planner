@@ -6,8 +6,8 @@ import re
 
 from fastapi import APIRouter
 
-from app.config import ConfigurationError, load_environment
-from app.db.models import APPLICATION_TABLES, Base
+from app.core.config import ConfigurationError, load_environment
+from app.core.models import APPLICATION_TABLES, Base
 
 
 def configured_modules() -> tuple[str, ...]:

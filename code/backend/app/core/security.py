@@ -7,7 +7,7 @@ from uuid import UUID
 
 import jwt
 
-from app.config import ConfigurationError, load_environment, validate_supabase_origin
+from app.core.config import ConfigurationError, load_environment, validate_supabase_origin
 
 
 class AuthenticationError(ValueError):
