@@ -89,11 +89,25 @@ These process variables override the existing local .env without overwriting it.
 
 .env.example contains placeholders only. DATABASE_URL is the restricted runtime LOGIN; MIGRATION_DATABASE_URL is separate admin/migration configuration and never a fallback. SUPABASE_URL is the trusted origin; SUPABASE_PUBLIC_KEY must be publishable/anon. APP_ENV is production by default; only explicit development permits loopback HTTP Auth. Remote URLs require HTTPS/Auth and verify-full TLS/PostgreSQL. Use direct or verified session-mode PostgreSQL port 5432; transaction pooler 6543 is unsupported. CORS_ORIGINS is an optional comma-separated exact origin list. BACKEND_MODULES registers teammate packages without shared-code changes.
 
-No runtime/admin/password/service-role secrets are committed or sent to clients. API errors omit raw inputs, passwords, tokens, SQL and provider details. RLS claims are verified and transaction-local; ordinary CRUD rejects owner/admin/BYPASSRLS connections. Read docs/backend-architecture.md for the trust boundary and docs/module-integration-guide.md before adding models/routes.
+No runtime/admin/password/service-role secrets are committed or sent to clients. API errors omit raw inputs, passwords, tokens, SQL and provider details. RLS claims are verified and transaction-local; ordinary CRUD rejects owner/admin/BYPASSRLS connections unless the development-only option below is explicitly enabled. Read docs/backend-architecture.md for the trust boundary and docs/module-integration-guide.md before adding models/routes.
+
+### Manual Swagger testing with the existing Supabase connection
+
+This workspace's ignored `.env` contains the existing Supabase runtime connection, with `APP_ENV=development` and `ALLOW_ADMIN_DATABASE_RUNTIME=true`. No `.env.supabase` file is needed. Migration settings remain separate; the application never automatically falls back to them. Restart the server after changing `.env`; existing process variables have precedence.
+
+From `code/backend`, start with:
+
+```powershell
+& '.\.venv\Scripts\python.exe' -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
+Open `http://127.0.0.1:8000/docs`. Liveness is `/api/v1/health`; database readiness is `/api/v1/health/ready`. Press Ctrl+C in the server terminal to stop it. A successful readiness response checks connectivity, application-table presence, RLS-enabled flags, and absence of a residual user identity; it does not certify RLS enforcement in this mode.
+
+**Development/testing only:** Supabase `postgres` has administrative privileges and can bypass RLS even with `row_security=on` and transaction-local JWT claims. Existing policies remain enabled for restricted roles, but they do not isolate rows for this administrative connection. JWT verification and explicit API ownership filters remain active. No `scheduler_runtime` role needs to be provisioned for this mode. `ALLOW_ADMIN_DATABASE_RUNTIME` defaults to false and is rejected in production. Use a restricted database role before production use or database RLS isolation testing.
 
 ## APIs and handover
 
-There are 19 method/route operations: two health checks; registration/login/refresh; own profile/preferences retrieval/update; task CRUD/list; event CRUD/list with ONCE/WEEKLY rules. Open Swagger at `http://127.0.0.1:8000/docs`, ReDoc at `/redoc`, and OpenAPI at `/openapi.json`. All private APIs require Supabase bearer access tokens. Every operation includes schemas, validation/error descriptions and examples. Exported OpenAPI lives in docs/openapi.json.
+There are 21 method/route operations: two health checks; registration/signup OTP verification/resend/login/refresh; own profile/preferences retrieval/update; task CRUD/list; event CRUD/list with ONCE/WEEKLY rules. Open Swagger at `http://127.0.0.1:8000/docs`, ReDoc at `/redoc`, and OpenAPI at `/openapi.json`. All private APIs require Supabase bearer access tokens. Every operation includes schemas, validation/error descriptions and examples. Exported OpenAPI lives in docs/openapi.json. The [DAYLI signup/resend email template](docs/email-templates/dayli-signup-otp.html) and manual dashboard instructions are documented in the [API reference](docs/api-reference.md). Registration rejects existing confirmed or pending emails with 409; its private read-only Auth lookup requires `SUPABASE_SERVICE_ROLE_KEY`. Public Auth operations still use `SUPABASE_PUBLIC_KEY` or `SUPABASE_ANON_KEY`; application CRUD never uses the service-role key.
 
 Task importance is priority 1–5; status is UNSCHEDULED. Events remain commitments, with MANUAL/SAVED constants; weekly weekday derives from first date. No event-to-task copy, materialized occurrence, exception workflow, energy/attention computation or optimization exists. PATCH validates combined records; list pagination is bounded and avoids per-item queries.
 

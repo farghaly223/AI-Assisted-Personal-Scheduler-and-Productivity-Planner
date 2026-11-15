@@ -508,7 +508,7 @@
           "Authentication"
         ],
         "summary": "Register through Supabase Auth",
-        "description": "Public endpoint. Email confirmation may be required; in that case session is null and no application profile is created until verified login. Never persists passwords. Example: email student@example.com, password a strong private password, optional full_name.",
+        "description": "Public endpoint. Rejects existing confirmed or unconfirmed email accounts with 409 after a server-side Auth Admin lookup. That lookup requires SUPABASE_SERVICE_ROLE_KEY; ordinary Auth requests use the public key. With email confirmation enabled and the DAYLI Confirm signup template installed, sends a six-digit signup code. A pending confirmation returns session null; call /auth/verify-otp with the email and code. No profile is created until successful verification or verified login. Never persists passwords.",
         "operationId": "register_api_v1_auth_register_post",
         "requestBody": {
           "content": {
@@ -564,6 +564,535 @@
                       },
                       "confirmation_required": true,
                       "session": null
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Authentication provider rejected registration",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "default": {
+                    "summary": "Example",
+                    "value": {
+                      "error": {
+                        "code": "request_failed",
+                        "message": "Authentication provider rejected registration",
+                        "details": []
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired access token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "default": {
+                    "summary": "Example",
+                    "value": {
+                      "error": {
+                        "code": "invalid_token",
+                        "message": "Missing, invalid or expired access token",
+                        "details": []
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "WWW-Authenticate": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Bearer for invalid/missing access tokens"
+              }
+            }
+          },
+          "404": {
+            "description": "Resource absent or owned by another user",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "default": {
+                    "summary": "Example",
+                    "value": {
+                      "error": {
+                        "code": "not_found",
+                        "message": "Resource absent or owned by another user",
+                        "details": []
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Email is already registered; log in or resend the signup verification code",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "default": {
+                    "summary": "Example",
+                    "value": {
+                      "error": {
+                        "code": "email_already_registered",
+                        "message": "Email is already registered; log in or resend the signup verification code",
+                        "details": []
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid request or combined record",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "default": {
+                    "summary": "Example",
+                    "value": {
+                      "error": {
+                        "code": "invalid_request",
+                        "message": "Invalid request or combined record",
+                        "details": []
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Authentication provider rate limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "default": {
+                    "summary": "Example",
+                    "value": {
+                      "error": {
+                        "code": "auth_rate_limited",
+                        "message": "Authentication provider rate limit",
+                        "details": []
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Retry delay in seconds when supplied by the Auth provider"
+              }
+            }
+          },
+          "502": {
+            "description": "Authentication provider failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "default": {
+                    "summary": "Example",
+                    "value": {
+                      "error": {
+                        "code": "request_failed",
+                        "message": "Authentication provider failure",
+                        "details": []
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Required backend dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "default": {
+                    "summary": "Example",
+                    "value": {
+                      "error": {
+                        "code": "backend_unavailable",
+                        "message": "Required backend dependency unavailable",
+                        "details": []
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected backend error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "default": {
+                    "summary": "Example",
+                    "value": {
+                      "error": {
+                        "code": "request_failed",
+                        "message": "Unexpected backend error",
+                        "details": []
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/verify-otp": {
+      "post": {
+        "tags": [
+          "Authentication"
+        ],
+        "summary": "Verify a six-digit signup email code",
+        "description": "Public endpoint; no bearer token required. Accepts email and a six-digit ASCII token string, including leading zeros. Calls Supabase verifyOtp with type signup. Returns a verified session and provisions the own profile/default preferences through the existing transaction. Invalid, expired or reused codes return 401; malformed input returns 422; provider rate limits return 429. Never stores or logs the code.",
+        "operationId": "verify_signup_otp_api_v1_auth_verify_otp_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignupVerificationRequest"
+              },
+              "examples": {
+                "default": {
+                  "summary": "Example",
+                  "value": {
+                    "email": "student@example.com",
+                    "token": "012345"
+                  }
+                }
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthResponse"
+                },
+                "examples": {
+                  "default": {
+                    "summary": "Example",
+                    "value": {
+                      "user": {
+                        "id": "00000000-0000-4000-8000-000000000001",
+                        "email": "student@example.com"
+                      },
+                      "confirmation_required": false,
+                      "session": {
+                        "access_token": "REPLACE_WITH_ACCESS_TOKEN",
+                        "refresh_token": "REPLACE_WITH_REFRESH_TOKEN",
+                        "token_type": "bearer",
+                        "expires_in": 3600,
+                        "expires_at": 1794823200
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Authentication provider rejected registration",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "default": {
+                    "summary": "Example",
+                    "value": {
+                      "error": {
+                        "code": "request_failed",
+                        "message": "Authentication provider rejected registration",
+                        "details": []
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid, expired or already used signup verification code",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "default": {
+                    "summary": "Example",
+                    "value": {
+                      "error": {
+                        "code": "invalid_otp",
+                        "message": "Invalid, expired or already used signup verification code",
+                        "details": []
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource absent or owned by another user",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "default": {
+                    "summary": "Example",
+                    "value": {
+                      "error": {
+                        "code": "not_found",
+                        "message": "Resource absent or owned by another user",
+                        "details": []
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict with existing data or missing profile",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "default": {
+                    "summary": "Example",
+                    "value": {
+                      "error": {
+                        "code": "conflict",
+                        "message": "Conflict with existing data or missing profile",
+                        "details": []
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid request or combined record",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "default": {
+                    "summary": "Example",
+                    "value": {
+                      "error": {
+                        "code": "invalid_request",
+                        "message": "Invalid request or combined record",
+                        "details": []
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Authentication provider rate limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "default": {
+                    "summary": "Example",
+                    "value": {
+                      "error": {
+                        "code": "auth_rate_limited",
+                        "message": "Authentication provider rate limit",
+                        "details": []
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Retry delay in seconds when supplied by the Auth provider"
+              }
+            }
+          },
+          "502": {
+            "description": "Authentication provider failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "default": {
+                    "summary": "Example",
+                    "value": {
+                      "error": {
+                        "code": "request_failed",
+                        "message": "Authentication provider failure",
+                        "details": []
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Required backend dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "default": {
+                    "summary": "Example",
+                    "value": {
+                      "error": {
+                        "code": "backend_unavailable",
+                        "message": "Required backend dependency unavailable",
+                        "details": []
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected backend error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "default": {
+                    "summary": "Example",
+                    "value": {
+                      "error": {
+                        "code": "request_failed",
+                        "message": "Unexpected backend error",
+                        "details": []
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/resend-otp": {
+      "post": {
+        "tags": [
+          "Authentication"
+        ],
+        "summary": "Resend a signup email verification code",
+        "description": "Public endpoint; accepts email only, without a bearer token. Uses Supabase resend with type signup and the existing Confirm signup email template. Returns a generic accepted response for unconfirmed, confirmed or absent accounts; only unconfirmed accounts receive mail. Does not create an account, profile or session. Provider rate limits return 429 with Retry-After when available; invalid input returns 422, provider rejection 400, and provider/connectivity failures 502/503.",
+        "operationId": "resend_signup_otp_api_v1_auth_resend_otp_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResendSignupCodeRequest"
+              },
+              "examples": {
+                "default": {
+                  "summary": "Example",
+                  "value": {
+                    "email": "student@example.com"
+                  }
+                }
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResendSignupCodeResponse"
+                },
+                "examples": {
+                  "default": {
+                    "summary": "Example",
+                    "value": {
+                      "status": "accepted",
+                      "message": "If this email has an unconfirmed account, a verification code will be sent."
                     }
                   }
                 }
@@ -6297,6 +6826,68 @@
           "password"
         ],
         "title": "RegisterRequest"
+      },
+      "ResendSignupCodeRequest": {
+        "properties": {
+          "email": {
+            "type": "string",
+            "maxLength": 320,
+            "minLength": 3,
+            "pattern": "^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$",
+            "title": "Email"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "email"
+        ],
+        "title": "ResendSignupCodeRequest"
+      },
+      "ResendSignupCodeResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "accepted",
+            "title": "Status",
+            "default": "accepted"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message",
+            "default": "If this email has an unconfirmed account, a verification code will be sent."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "ResendSignupCodeResponse"
+      },
+      "SignupVerificationRequest": {
+        "properties": {
+          "email": {
+            "type": "string",
+            "maxLength": 320,
+            "minLength": 3,
+            "pattern": "^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$",
+            "title": "Email"
+          },
+          "token": {
+            "type": "string",
+            "maxLength": 6,
+            "minLength": 6,
+            "format": "password",
+            "title": "Token",
+            "description": "Exactly six ASCII digits, sent as a string to preserve leading zeros.",
+            "writeOnly": true
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "email",
+          "token"
+        ],
+        "title": "SignupVerificationRequest"
       },
       "TaskCreate": {
         "properties": {

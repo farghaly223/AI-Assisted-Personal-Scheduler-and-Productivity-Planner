@@ -1,16 +1,23 @@
 """Read-only runtime connection/role check: python -m app.db.check."""
 
-from app.config import database_url
+from app.config import ConfigurationError, Settings
 from app.db.session import Database, create_database_engine
 
 
 def main() -> int:
     database = None
     try:
-        database = Database(create_database_engine(database_url("DATABASE_URL")))
+        settings = Settings.from_environment()
+        if not settings.runtime_url:
+            raise ConfigurationError("Set DATABASE_URL in the environment or backend/.env")
+        database = Database(create_database_engine(settings.runtime_url),
+                            allow_admin_runtime=settings.allow_admin_database_runtime)
         database.check_connection()
-        print("Connection OK; restricted role and RLS prerequisites verified; no scoped user identity.")
-        print("This check alone does not prove cross-user isolation; run the integration tests.")
+        if settings.allow_admin_database_runtime:
+            print("Connection OK; development administrative access; RLS isolation is not enforced for this connection.")
+        else:
+            print("Connection OK; restricted role and RLS prerequisites verified; no scoped user identity.")
+        print("This connection check alone does not prove cross-user isolation.")
         return 0
     except Exception as error:
         # Driver exception text can contain endpoints/credentials. Never print it.

@@ -1,6 +1,7 @@
 """Run with: python -m uvicorn app.main:app --host 127.0.0.1 --port 8000."""
 
 from contextlib import asynccontextmanager
+import logging
 
 import httpx
 from fastapi import FastAPI, Request
@@ -22,7 +23,12 @@ def create_app(*, settings: Settings | None = None, database: Database | None = 
     extra_routers = list(module_routers(settings.modules))
     owns_database = database is None and settings.runtime_url is not None
     if owns_database:
-        database = Database(create_database_engine(settings.runtime_url))
+        database = Database(create_database_engine(settings.runtime_url),
+                            allow_admin_runtime=settings.allow_admin_database_runtime)
+        if settings.allow_admin_database_runtime:
+            logging.getLogger("scheduler").warning(
+                "Development administrative database access enabled: RLS isolation is not enforced for this connection."
+            )
     if verifier is None and settings.supabase_url:
         verifier = SupabaseJWTVerifier(settings.supabase_url, allow_local_http=settings.environment == "development")
     owns_auth_client = auth_client is None

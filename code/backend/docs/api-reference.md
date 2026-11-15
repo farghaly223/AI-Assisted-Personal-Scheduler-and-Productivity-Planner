@@ -2,7 +2,7 @@
 
 Base URL: `http://127.0.0.1:8000/api/v1` for local development. Swagger: `/docs`; ReDoc: `/redoc`; OpenAPI: `/openapi.json` and exported docs/openapi.json. Every operation includes request/response examples, validation and errors. No Flutter code or integration is included.
 
-Public endpoints: health, register, login, refresh. All others require `Authorization: Bearer ACCESS_TOKEN`. Never submit user_id, generated IDs, timestamps, task status, or event source/status. Obtain current user/profile identity from authenticated responses, not a request body.
+Public endpoints: health, register, verify-otp, resend-otp, login, refresh. All others require `Authorization: Bearer ACCESS_TOKEN`. Never submit user_id, generated IDs, timestamps, task status, or event source/status. Obtain current user/profile identity from authenticated responses, not a request body.
 
 ## Routes and contracts
 
@@ -11,6 +11,8 @@ Public endpoints: health, register, login, refresh. All others require `Authoriz
 | GET | `/health` | No body | 200 `{"status":"ok"}` |
 | GET | `/health/ready` | No body | 200 `{"status":"ready"}`; restricted DB/RLS check |
 | POST | `/auth/register` | Auth example below; optional username/full_name | 201 AuthResponse; session may be null for email confirmation |
+| POST | `/auth/verify-otp` | `{"email":"student@example.com","token":"012345"}`; no bearer | 200 AuthResponse with verified session; own profile/default preferences provisioned |
+| POST | `/auth/resend-otp` | `{"email":"student@example.com"}`; no bearer | 202 `{"status":"accepted","message":"If this email has an unconfirmed account, a verification code will be sent."}` |
 | POST | `/auth/login` | Email/password Auth example | 200 AuthResponse |
 | POST | `/auth/refresh` | `{"refresh_token":"REFRESH_TOKEN"}` | 200 AuthResponse with rotated session |
 | GET | `/profiles/me` | Bearer, no body | 200 ProfileRead; missing own profile provisioned idempotently |
@@ -30,11 +32,21 @@ Public endpoints: health, register, login, refresh. All others require `Authoriz
 
 ## Authentication example
 
+Registration checks the existing Supabase Auth accounts before submitting signup. An existing email, confirmed or unconfirmed, returns **409** with `email_already_registered`; use login or resend-otp instead. This server-side lookup requires `SUPABASE_SERVICE_ROLE_KEY` in ignored `.env` and uses it only for the read-only Auth Admin endpoint, never application CRUD. `SUPABASE_PUBLIC_KEY` (or `SUPABASE_ANON_KEY`) remains the key for signup/login/verify/resend. If the private lookup cannot run, registration fails closed with 503 `registration_check_unavailable`. Email comparison is case-insensitive; the filtered lookup is bounded to 100 results and a full unmatched page fails closed. Supabase remains responsible for account uniqueness under concurrent signup. Returning an explicit 409 discloses account existence as requested; apply ingress rate limits to this public route.
+
+`POST /auth/resend-otp` calls Supabase `/auth/v1/resend` with the server-controlled type `signup`. It requires neither an access token nor the private lookup key and performs no application database work. Existing unconfirmed accounts receive a code; confirmed or absent accounts get the same accepted response without mail or account creation. Respect 429/Retry-After; other failures are 422 malformed input, 400 provider rejection, 502 invalid/provider response, and 503 missing public Auth configuration or connectivity. Resend uses the same **Confirm signup** template as initial registration; there is no separate Supabase resend template.
+
 ```json
 {"email":"student@example.com","password":"EXAMPLE_PASSWORD_REPLACE_ME","full_name":"Student Name"}
 ```
 
-Only register accepts full_name/username; login accepts email/password. Registration password is 8–1024 characters; login is 1–1024; email has basic format and max 320 validation, with final validation delegated to Supabase. Confirmation-required signup returns `session: null`; complete email confirmation then login. Profile metadata is validated and retained on first verified login. An already claimed optional username leaves the new profile username null; update it later through profile PATCH.
+Only register accepts full_name/username; login accepts email/password. Registration password is 8–1024 characters; login is 1–1024; email has basic format and max 320 validation, with final validation delegated to Supabase. Confirmation-required signup returns `session: null`; submit the emailed code to `/auth/verify-otp`. The token must be a string containing exactly six ASCII digits; leading zeros are preserved. The backend fixes the verification type to `signup`; callers cannot supply another type. Successful verification returns the session below and provisions the own profile/default preferences. Profile metadata is validated and retained on first successful verification or verified login. An already claimed optional username leaves the new profile username null; update it later through profile PATCH.
+
+For the hosted project, keep **Authentication → Sign In / Providers → Email → Confirm email** enabled. Set **Email OTP length** to **6** if the dashboard exposes this setting; the project must issue six-digit codes to match this endpoint. Configure **Email OTP Expiration** to your chosen duration, for example 600 seconds. In **Authentication → Email Templates → Confirm signup**, set the subject to `Your DAYLI verification code` and paste all of [the DAYLI HTML template](email-templates/dayli-signup-otp.html). The template uses `{{ .Token }}` and has no confirmation link. This is signup confirmation; the password login flow remains available. No application database URL, table, policy, trigger, or migration changes are needed. Dashboard settings are manual and were not applied by the agent.
+
+Manual order: register → read the signup email → verify-otp → authorize Swagger with the returned access token → retrieve `/profiles/me` and `/preferences/me`. An incorrect, expired or reused code returns 401 with `invalid_otp`; malformed code/email or extra fields returns 422. Provider throttling returns 429; unavailable Auth/database dependencies return 503, and an invalid/unverifiable provider session returns 502. If Supabase confirms the code but database onboarding fails, log in with the original password once the database is available rather than reusing the consumed code. Supabase owns code generation, expiry and verification; the backend does not store OTPs.
+
+To manually check duplicates and resending: register a new email once; submit register again with that email and expect 409; submit resend-otp with the email and expect 202; verify the code from the received email. After confirmation, register still returns 409 and resend returns 202 without another signup email. Do not interpret accepted as proof that mail was delivered. No real signup, resend, or OTP verification was executed by the agent.
 
 ```json
 {

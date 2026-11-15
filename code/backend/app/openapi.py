@@ -44,7 +44,11 @@ def build_openapi(application):
                 operation["description"] = "Public endpoint. " + ("Checks the restricted database role, RLS and absence of leaked identity; returns 503 if unavailable." if path.endswith("/ready") else "Checks process liveness without contacting the database or authentication provider.")
             elif path.startswith("/api/v1/auth/"):
                 result = AUTH
-                body = ({"refresh_token": "REPLACE_WITH_REFRESH_TOKEN"} if path.endswith("/refresh") else
+                if path.endswith("/resend-otp"):
+                    result = {"status": "accepted", "message": "If this email has an unconfirmed account, a verification code will be sent."}
+                body = ({"email": "student@example.com"} if path.endswith("/resend-otp") else
+                        {"email": "student@example.com", "token": "012345"} if path.endswith("/verify-otp") else
+                        {"refresh_token": "REPLACE_WITH_REFRESH_TOKEN"} if path.endswith("/refresh") else
                         {"email": "student@example.com", "password": "EXAMPLE_PASSWORD_REPLACE_ME"})
             elif path == "/api/v1/profiles/me":
                 result, body = PROFILE, {"full_name": "Student Name"}
@@ -73,8 +77,14 @@ def build_openapi(application):
                 else:
                     code = {"401": "invalid_token", "404": "not_found", "409": "conflict", "422": "invalid_request",
                             "429": "auth_rate_limited", "503": "backend_unavailable"}.get(status, "request_failed")
+                    if path.endswith("/verify-otp") and status == "401":
+                        code = "invalid_otp"
+                        response["description"] = "Invalid, expired or already used signup verification code"
+                    if path.endswith("/register") and status == "409":
+                        code = "email_already_registered"
+                        response["description"] = "Email is already registered; log in or resend the signup verification code"
                     media["examples"] = examples({"error": {"code": code, "message": response["description"], "details": []}})
-                if status == "401":
+                if status == "401" and not path.endswith("/verify-otp"):
                     response["headers"] = {"WWW-Authenticate": {"schema": {"type": "string"}, "description": "Bearer for invalid/missing access tokens"}}
                 elif status == "429":
                     response["headers"] = {"Retry-After": {"schema": {"type": "string"}, "description": "Retry delay in seconds when supplied by the Auth provider"}}

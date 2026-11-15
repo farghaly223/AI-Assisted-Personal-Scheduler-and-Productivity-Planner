@@ -253,8 +253,11 @@ class Page(Contract, Generic[Item]):
     has_more: bool
 
 
+EmailAddress = Annotated[str, Field(min_length=3, max_length=320, pattern=r"^[^\s@]+@[^\s@]+\.[^\s@]+$")]
+
+
 class LoginRequest(Contract):
-    email: Annotated[str, Field(min_length=3, max_length=320, pattern=r"^[^\s@]+@[^\s@]+\.[^\s@]+$")]
+    email: EmailAddress
     password: SecretStr = Field(min_length=1, max_length=1024)
 
 
@@ -267,6 +270,29 @@ class RegisterRequest(LoginRequest):
     @classmethod
     def username_not_padded(cls, value):
         return ProfileUpdate.username_not_padded(value)
+
+
+class ResendSignupCodeRequest(Contract):
+    email: EmailAddress
+
+
+class ResendSignupCodeResponse(Contract):
+    status: Literal["accepted"] = "accepted"
+    message: str = "If this email has an unconfirmed account, a verification code will be sent."
+
+
+class SignupVerificationRequest(Contract):
+    email: EmailAddress
+    token: SecretStr = Field(min_length=6, max_length=6,
+        description="Exactly six ASCII digits, sent as a string to preserve leading zeros.")
+
+    @field_validator("token")
+    @classmethod
+    def six_digit_token(cls, value):
+        code = value.get_secret_value()
+        if not code.isascii() or not code.isdigit():
+            raise ValueError("Verification code must contain exactly six ASCII digits")
+        return value
 
 
 class RefreshRequest(Contract):
