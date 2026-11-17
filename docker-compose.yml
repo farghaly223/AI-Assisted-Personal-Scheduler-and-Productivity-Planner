@@ -1,0 +1,7 @@
+services:
+  backend:
+    build: ./code/backend
+    env_file:
+      - ./code/backend/.env
+    ports:
+      - "127.0.0.1:8000:8000"
