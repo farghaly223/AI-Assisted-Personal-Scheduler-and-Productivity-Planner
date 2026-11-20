@@ -5,7 +5,7 @@ import sqlalchemy as sa
 from sqlalchemy.pool import NullPool
 
 from app.core.config import LOCAL_HOSTS, ConfigurationError, database_url
-from app.core.models import Base
+from app.core.schema_models import Base  # Complete approved contract; one shared Base/history.
 from app.core.registry import configured_modules, load_module_models, managed_table_names
 from app.core.migration_scope import explicit_schema_reflection
 
@@ -36,7 +36,9 @@ options = dict(
 
 if context.is_offline_mode():
     # Offline review needs no credentials or database access.
-    context.configure(dialect_name="postgresql", literal_binds=True, **options)
+    # A standalone SQL Editor script must contain literal %, not psycopg's %%
+    # parameter escaping inside PL/pgSQL RAISE/format expressions.
+    context.configure(dialect_name="postgresql", dialect_opts={"paramstyle": "named"}, literal_binds=True, **options)
     with context.begin_transaction():
         context.run_migrations()
 else:

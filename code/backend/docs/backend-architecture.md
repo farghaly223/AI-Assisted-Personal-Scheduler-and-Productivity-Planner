@@ -49,7 +49,7 @@ Registration checks for an existing confirmed or pending email with a bounded, r
 
 Protected routes use `SessionDep`. A token is verified before connection acquisition. A dedicated runtime LOGIN must inherit authenticated, lack superuser/BYPASSRLS/administrative memberships, and have no ownership path to any registered application table. Per transaction, only verified subject/authenticated claims enter parameterized transaction-local settings. UTC and row_security are set locally too. Owner filters supplement PostgreSQL RLS; user_id never comes from the body.
 
-For local manual Swagger testing, `APP_ENV=development` together with the explicit `ALLOW_ADMIN_DATABASE_RUNTIME=true` option permits the existing administrative database connection without provisioning a separate runtime role. The default remains false, and production settings reject this option. Table presence and RLS-enabled checks, JWT verification, verified ownership filters, transaction-local identity, and pool rollback remain in place. **Administrative `postgres` access bypasses RLS:** setting `row_security=on` does not remove `BYPASSRLS`, and JWT claims do not switch the SQL login role. Isolation for these requests therefore relies on application ownership filters. This mode cannot verify database RLS isolation and must not be used in production. Existing RLS policies remain meaningful for restricted database roles and Supabase Data API requests using those roles.
+Ordinary user sessions and readiness require a dedicated restricted database LOGIN in every environment. The legacy `ALLOW_ADMIN_DATABASE_RUNTIME` keyword remains accepted for configuration compatibility but cannot permit privileged CRUD. Owners/postgres/service-role/admin/BYPASSRLS roles, privileged membership, app-function/table ownership and schema DDL access are rejected. JWT verification and transaction-local identity are mandatory.
 
 Function-scoped dependency teardown commits or rolls back before the HTTP response is sent. Commit failures therefore cannot produce successful responses. Pool return rolls back residual transactions. Pool-size-one tests verify identity cleanup after success, failure, and connection reuse. Runtime credentials remain trusted backend secrets: SQL access with those credentials must never be given to end users.
 
@@ -59,7 +59,7 @@ The profile insert trigger creates exactly one preferences row. Existing trigger
 
 `Settings` reads `.env` without overriding injected environment values. Runtime uses only DATABASE_URL; Alembic/role provisioning use only MIGRATION_DATABASE_URL. Actual secrets, environments, local cluster files and signing keys are ignored. Remote database URLs require verify-full TLS; remote Auth requires HTTPS. Loopback HTTP Auth is permitted only in explicitly chosen development mode. Wildcard CORS is rejected; configure exact browser origins when necessary.
 
-This workspace's ignored `.env` currently contains the Supabase runtime connection with `APP_ENV=development` and `ALLOW_ADMIN_DATABASE_RUNTIME=true`. Start the server with the standard documented uvicorn command. `.env.supabase` is not required. Restart the process after changing `.env`; existing process variables retain precedence. No password, token, key, or connection URL belongs in committed documentation.
+The private `.env` was not rewritten. Configure restricted runtime credentials before testing against the manually upgraded shared Supabase project. Migration/admin credentials remain separate; restart after configuration changes.
 
 No network/SQL connection is made merely to import models or build OpenAPI. Engines and Auth HTTP connections are reused, with bounded pools and timeouts. Owned resources close in application lifespan cleanup. Missing Auth configuration allows local health/docs/test development but protected APIs remain unavailable until configured.
 
@@ -74,3 +74,6 @@ Weekly rules retain local dates/times, end-day offset and their own timezone. IS
 ## Scope boundary
 
 Teammates add module packages and use the shared registry, session, Auth and migration history. No energy/attention calculations, Decision Engine, optimization, rescheduling, frontend code or frontend integration are included.
+
+
+The final 31-table contract is described in [database deployment/ownership/security](database-migrations.md) and [data dictionary](database-data-dictionary.md). Complete Alembic metadata is assembled in `app/core/schema_models.py`; activating planning modules resolves shared references on the same Base. Default core-only discovery remains independent. The database guard checks all installed profile-owned tables, including dormant modules. This database foundation introduces no new business module APIs or algorithms.

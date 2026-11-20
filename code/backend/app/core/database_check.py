@@ -13,10 +13,7 @@ def main() -> int:
         database = Database(create_database_engine(settings.runtime_url),
                             allow_admin_runtime=settings.allow_admin_database_runtime)
         database.check_connection()
-        if settings.allow_admin_database_runtime:
-            print("Connection OK; development administrative access; RLS isolation is not enforced for this connection.")
-        else:
-            print("Connection OK; restricted role and RLS prerequisites verified; no scoped user identity.")
+        print("Connection OK; restricted role and RLS prerequisites verified; no scoped user identity.")
         print("This connection check alone does not prove cross-user isolation.")
         return 0
     except Exception as error:

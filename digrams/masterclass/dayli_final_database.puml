@@ -1,0 +1,550 @@
+@startuml dayli_final_database
+title DAYLI / Tempo — final database (0003 above deployed 0002_energy)
+hide circle
+skinparam linetype ortho
+skinparam shadowing false
+skinparam packageStyle rectangle
+skinparam entity {
+  BackgroundColor White
+  BorderColor #425466
+}
+legend left
+  PK = UUID primary key; FK = real foreign key
+  * = NOT NULL; optional columns omit *
+  Business ownership is shown by package.
+  All app tables use profile ownership + RLS.
+endlegend
+package "Supabase Auth (external; unchanged)" #EEEEEE {
+  entity "auth.users" as auth_users {
+    * id : UUID <<PK>>
+  }
+}
+package "User" #E8F4FC {
+  entity "profiles" as profiles <<existing>> {
+    * id : UUID <<PK, FK>>
+    username : VARCHAR(100)
+    full_name : VARCHAR(200)
+    * created_at : TIMESTAMPTZ
+    * updated_at : TIMESTAMPTZ
+  }
+  entity "user_preferences" as user_preferences <<existing>> {
+    * preference_id : UUID <<PK>>
+    * user_id : UUID <<FK>>
+    * timezone : VARCHAR(100)
+    * notifications_enabled : BOOLEAN
+    preferred_work_start : TIME(0) WITHOUT TIME ZONE
+    preferred_work_end : TIME(0) WITHOUT TIME ZONE
+    * updated_at : TIMESTAMPTZ
+  }
+  entity "availability_windows" as availability_windows <<new>> {
+    * id : UUID <<PK>>
+    * user_id : UUID <<FK>>
+    * weekday : SMALLINT
+    * start_time : TIME(0) WITHOUT TIME ZONE
+    * end_time : TIME(0) WITHOUT TIME ZONE
+    * timezone : VARCHAR(100)
+    valid_from : DATE
+    valid_until : DATE
+    * created_at : TIMESTAMPTZ
+    * updated_at : TIMESTAMPTZ
+  }
+}
+package "Scheduler" #E8F8ED {
+  entity "tasks" as tasks <<existing>> {
+    * task_id : UUID <<PK>>
+    * user_id : UUID <<FK>>
+    * title : VARCHAR(500)
+    * task_type : VARCHAR(8)
+    deadline : TIMESTAMPTZ
+    * estimated_duration_minutes : INTEGER
+    * category : VARCHAR(20)
+    * priority : INTEGER
+    fixed_start_at : TIMESTAMPTZ
+    fixed_end_at : TIMESTAMPTZ
+    * status : VARCHAR(20)
+    context : VARCHAR(500)
+    * created_at : TIMESTAMPTZ
+    * updated_at : TIMESTAMPTZ
+  }
+  entity "events" as events <<existing>> {
+    * event_id : UUID <<PK>>
+    * user_id : UUID <<FK>>
+    * title : VARCHAR(500)
+    location : VARCHAR(500)
+    * category : VARCHAR(20)
+    * recurrence_type : VARCHAR(6)
+    start_at : TIMESTAMPTZ
+    end_at : TIMESTAMPTZ
+    recurrence_first_date : DATE
+    recurrence_until_date : DATE
+    recurrence_start_time : TIME(0) WITHOUT TIME ZONE
+    recurrence_end_time : TIME(0) WITHOUT TIME ZONE
+    recurrence_end_day_offset : SMALLINT
+    recurrence_timezone : VARCHAR(100)
+    * source : VARCHAR(20)
+    * status : VARCHAR(20)
+    * created_at : TIMESTAMPTZ
+    * updated_at : TIMESTAMPTZ
+  }
+  entity "task_requirements" as task_requirements <<new>> {
+    * task_id : UUID <<PK, FK>>
+    * user_id : UUID <<FK>>
+    * can_split : BOOLEAN
+    minimum_session_minutes : INTEGER
+    preferred_start_time : TIME(0) WITHOUT TIME ZONE
+    preferred_end_time : TIME(0) WITHOUT TIME ZONE
+    preferred_timezone : VARCHAR(100)
+    required_energy_level : VARCHAR(6)
+    required_attention_level : VARCHAR(6)
+    * updated_at : TIMESTAMPTZ
+  }
+  entity "task_outcomes" as task_outcomes <<new>> {
+    * id : UUID <<PK>>
+    * user_id : UUID <<FK>>
+    task_id : UUID <<FK>>
+    schedule_item_id : UUID <<FK>>
+    * outcome : VARCHAR(9)
+    * occurred_at : TIMESTAMPTZ
+    * client_key : UUID
+    * task_snapshot : JSONB
+    note : VARCHAR(2000)
+    * created_at : TIMESTAMPTZ
+  }
+  entity "schedules" as schedules <<new>> {
+    * id : UUID <<PK>>
+    * user_id : UUID <<FK>>
+    current_version_id : UUID <<FK>>
+    * created_at : TIMESTAMPTZ
+    * updated_at : TIMESTAMPTZ
+  }
+  entity "schedule_versions" as schedule_versions <<new>> {
+    * id : UUID <<PK>>
+    * user_id : UUID <<FK>>
+    * schedule_id : UUID <<FK>>
+    * version_number : INTEGER
+    parent_version_id : UUID <<FK>>
+    decision_execution_id : UUID <<FK>>
+    * window_start_at : TIMESTAMPTZ
+    * window_end_at : TIMESTAMPTZ
+    * timezone : VARCHAR(100)
+    * origin : VARCHAR(11)
+    * status : VARCHAR(9)
+    * input_snapshot : JSONB
+    explanation : VARCHAR(4000)
+    * created_at : TIMESTAMPTZ
+    published_at : TIMESTAMPTZ
+  }
+  entity "schedule_items" as schedule_items <<new>> {
+    * id : UUID <<PK>>
+    * user_id : UUID <<FK>>
+    * schedule_version_id : UUID <<FK>>
+    * logical_key : UUID
+    * kind : VARCHAR(5)
+    task_id : UUID <<FK>>
+    event_id : UUID <<FK>>
+    event_occurrence_date : DATE
+    label : VARCHAR(500)
+    * start_at : TIMESTAMPTZ
+    * end_at : TIMESTAMPTZ
+    * is_locked : BOOLEAN
+    * source_snapshot : JSONB
+    * created_at : TIMESTAMPTZ
+  }
+  entity "unscheduled_tasks" as unscheduled_tasks <<new>> {
+    * id : UUID <<PK>>
+    * user_id : UUID <<FK>>
+    * schedule_version_id : UUID <<FK>>
+    task_id : UUID <<FK>>
+    * reason_code : VARCHAR(100)
+    explanation : VARCHAR(2000)
+    * task_snapshot : JSONB
+    * created_at : TIMESTAMPTZ
+  }
+  entity "schedule_validation_issues" as schedule_validation_issues <<new>> {
+    * id : UUID <<PK>>
+    * user_id : UUID <<FK>>
+    * schedule_version_id : UUID <<FK>>
+    item_id : UUID <<FK>>
+    related_item_id : UUID <<FK>>
+    * severity : VARCHAR(7)
+    * code : VARCHAR(100)
+    * message : VARCHAR(2000)
+    * details : JSONB
+    * created_at : TIMESTAMPTZ
+  }
+}
+package "Energy" #FFF4E6 {
+  entity "sleep_schedules" as sleep_schedules <<existing>> {
+    * id : UUID <<PK>>
+    * user_id : UUID <<FK>>
+    * bedtime : TIME(0) WITHOUT TIME ZONE
+    * wake_time : TIME(0) WITHOUT TIME ZONE
+    * timezone : VARCHAR(100)
+    * repeat_days : SMALLINT[]
+    * bedtime_reminder_enabled : BOOLEAN
+    * reminder_minutes_before : INTEGER
+    * wake_alarm_enabled : BOOLEAN
+    * is_active : BOOLEAN
+    * created_at : TIMESTAMPTZ
+    * updated_at : TIMESTAMPTZ
+  }
+  entity "sleep_sessions" as sleep_sessions <<existing>> {
+    * id : UUID <<PK>>
+    * user_id : UUID <<FK>>
+    * sleep_date : DATE
+    * start_time : TIMESTAMPTZ
+    * end_time : TIMESTAMPTZ
+    * duration_minutes : INTEGER
+    * timezone : VARCHAR(100)
+    * source : VARCHAR(20)
+    confidence : FLOAT
+    confirmed_start_at : TIMESTAMPTZ
+    confirmed_end_at : TIMESTAMPTZ
+    confirmed_at : TIMESTAMPTZ
+    confirmation_method : VARCHAR(20)
+    detection_version : VARCHAR(100)
+    batch_id : UUID <<FK>>
+    * status : VARCHAR(30)
+    * created_at : TIMESTAMPTZ
+    * updated_at : TIMESTAMPTZ
+  }
+  entity "sleep_usage_signals" as sleep_usage_signals <<existing>> {
+    * id : UUID <<PK>>
+    session_id : UUID <<FK>>
+    * user_id : UUID <<FK>>
+    * event_type : VARCHAR(50)
+    * event_timestamp : TIMESTAMPTZ
+    * device_id : UUID
+    * client_event_id : UUID
+    batch_id : UUID <<FK>>
+    * expires_at : TIMESTAMPTZ
+    * created_at : TIMESTAMPTZ
+  }
+  entity "sleep_quality_ratings" as sleep_quality_ratings <<existing>> {
+    * id : UUID <<PK>>
+    * session_id : UUID <<FK>>
+    * user_id : UUID <<FK>>
+    * rating : SMALLINT
+    notes : VARCHAR(500)
+    * created_at : TIMESTAMPTZ
+    * updated_at : TIMESTAMPTZ
+  }
+  entity "recovery_strategies" as recovery_strategies <<existing>> {
+    * id : UUID <<PK>>
+    * user_id : UUID <<FK>>
+    * strategy_type : VARCHAR(20)
+    * work_duration_minutes : INTEGER
+    * break_duration_minutes : INTEGER
+    * long_break_duration_minutes : INTEGER
+    * long_break_after_sessions : INTEGER
+    * is_active : BOOLEAN
+    * created_at : TIMESTAMPTZ
+    * updated_at : TIMESTAMPTZ
+  }
+  entity "recovery_periods" as recovery_periods <<existing>> {
+    * id : UUID <<PK>>
+    * user_id : UUID <<FK>>
+    * start_time : TIMESTAMPTZ
+    * end_time : TIMESTAMPTZ
+    * duration_minutes : INTEGER
+    planned_start_at : TIMESTAMPTZ
+    planned_end_at : TIMESTAMPTZ
+    observed_start_at : TIMESTAMPTZ
+    observed_end_at : TIMESTAMPTZ
+    * status : VARCHAR(7)
+    focus_session_id : UUID <<FK>>
+    strategy_id : UUID <<FK>>
+    schedule_item_id : UUID <<FK>>
+    client_key : UUID
+    * source : VARCHAR(20)
+    * recovery_type : VARCHAR(20)
+    * created_at : TIMESTAMPTZ
+    * updated_at : TIMESTAMPTZ
+  }
+  entity "energy_scores" as energy_scores <<existing>> {
+    * id : UUID <<PK>>
+    * user_id : UUID <<FK>>
+    * target_date : DATE
+    * status : VARCHAR(20)
+    score : NUMERIC(5, 2)
+    energy_level : VARCHAR(10)
+    confidence : FLOAT
+    sleep_session_id : UUID <<FK>>
+    timezone : VARCHAR(100)
+    * calculation_key : UUID
+    * calculation_version : VARCHAR(100)
+    * input_schema_version : SMALLINT
+    * input_snapshot : JSONB
+    explanation : VARCHAR(4000)
+    sleep_duration_minutes : INTEGER
+    sleep_quality_score : NUMERIC(5, 2)
+    sleep_quality_rating : SMALLINT
+    workload_score : NUMERIC(5, 2)
+    workload_level : VARCHAR(10)
+    recovery_score : NUMERIC(5, 2)
+    recovery_level : VARCHAR(10)
+    insights : JSONB
+    * calculated_at : TIMESTAMPTZ
+    * created_at : TIMESTAMPTZ
+    * updated_at : TIMESTAMPTZ
+  }
+}
+package "Attention" #F0EBFF {
+  entity "focus_sessions" as focus_sessions <<existing>> {
+    * id : UUID <<PK>>
+    * user_id : UUID <<FK>>
+    start_time : TIMESTAMPTZ
+    end_time : TIMESTAMPTZ
+    duration_minutes : INTEGER
+    planned_duration_minutes : INTEGER
+    task_id : UUID <<FK>>
+    schedule_item_id : UUID <<FK>>
+    client_session_key : UUID
+    * status : VARCHAR(20)
+    * created_at : TIMESTAMPTZ
+    * updated_at : TIMESTAMPTZ
+  }
+  entity "usage_sync_batches" as usage_sync_batches <<new>> {
+    * id : UUID <<PK>>
+    * user_id : UUID <<FK>>
+    * device_id : UUID
+    * client_batch_id : UUID
+    * local_date : DATE
+    * timezone : VARCHAR(100)
+    * revision : INTEGER
+    * window_start_at : TIMESTAMPTZ
+    * window_end_at : TIMESTAMPTZ
+    screen_active_seconds : INTEGER
+    app_switch_count : INTEGER
+    * status : VARCHAR(9)
+    processed_at : TIMESTAMPTZ
+    * created_at : TIMESTAMPTZ
+    * expires_at : TIMESTAMPTZ
+  }
+  entity "app_classifications" as app_classifications <<new>> {
+    * id : UUID <<PK>>
+    * user_id : UUID <<FK>>
+    * app_package : VARCHAR(255)
+    * classification : VARCHAR(11)
+    * created_at : TIMESTAMPTZ
+    * updated_at : TIMESTAMPTZ
+  }
+  entity "app_usage_summaries" as app_usage_summaries <<new>> {
+    * id : UUID <<PK>>
+    * user_id : UUID <<FK>>
+    * batch_id : UUID <<FK>>
+    * app_package : VARCHAR(255)
+    * foreground_seconds : INTEGER
+    foreground_transitions : INTEGER
+    * created_at : TIMESTAMPTZ
+  }
+  entity "attention_assessments" as attention_assessments <<new>> {
+    * id : UUID <<PK>>
+    * user_id : UUID <<FK>>
+    * questionnaire_version : VARCHAR(100)
+    * questionnaire_snapshot : JSONB
+    * status : VARCHAR(9)
+    result_score : NUMERIC(5, 2)
+    result_summary : VARCHAR(4000)
+    confidence : NUMERIC(5, 4)
+    calculation_version : VARCHAR(100)
+    completed_at : TIMESTAMPTZ
+    * created_at : TIMESTAMPTZ
+  }
+  entity "attention_questionnaire_responses" as attention_questionnaire_responses <<new>> {
+    * id : UUID <<PK>>
+    * user_id : UUID <<FK>>
+    * assessment_id : UUID <<FK>>
+    * question_key : VARCHAR(100)
+    * answer_value : VARCHAR(2000)
+    * created_at : TIMESTAMPTZ
+  }
+  entity "distraction_events" as distraction_events <<new>> {
+    * id : UUID <<PK>>
+    * user_id : UUID <<FK>>
+    * focus_session_id : UUID <<FK>>
+    * start_at : TIMESTAMPTZ
+    * end_at : TIMESTAMPTZ
+    app_package : VARCHAR(255)
+    * detection_source : VARCHAR(100)
+    * detector_version : VARCHAR(100)
+    confidence : NUMERIC(5, 4)
+    * status : VARCHAR(9)
+    reviewed_at : TIMESTAMPTZ
+    * client_key : UUID
+    * created_at : TIMESTAMPTZ
+  }
+  entity "attention_scores" as attention_scores <<new>> {
+    * id : UUID <<PK>>
+    * user_id : UUID <<FK>>
+    * target_date : DATE
+    * timezone : VARCHAR(100)
+    * status : VARCHAR(20)
+    score : NUMERIC(5, 2)
+    attention_level : VARCHAR(6)
+    confidence : NUMERIC(5, 4)
+    average_focus_seconds : NUMERIC(14, 3)
+    distraction_count : INTEGER
+    total_distraction_seconds : BIGINT
+    focus_completion_rate : NUMERIC(5, 4)
+    trend : VARCHAR(9)
+    assessment_id : UUID <<FK>>
+    * calculation_key : UUID
+    * calculation_version : VARCHAR(100)
+    * input_schema_version : SMALLINT
+    * input_snapshot : JSONB
+    * explanation : VARCHAR(4000)
+    * calculated_at : TIMESTAMPTZ
+    * created_at : TIMESTAMPTZ
+  }
+}
+package "Decision Engine" #FFEAF0 {
+  entity "decision_executions" as decision_executions <<new>> {
+    * id : UUID <<PK>>
+    * user_id : UUID <<FK>>
+    * execution_key : UUID
+    input_schedule_version_id : UUID <<FK>>
+    energy_score_id : UUID <<FK>>
+    attention_score_id : UUID <<FK>>
+    * algorithm_version : VARCHAR(100)
+    * input_schema_version : SMALLINT
+    * input_snapshot : JSONB
+    * status : VARCHAR(9)
+    overall_schedule_score : NUMERIC(5, 2)
+    explanation : VARCHAR(4000)
+    failure_code : VARCHAR(100)
+    * started_at : TIMESTAMPTZ
+    finished_at : TIMESTAMPTZ
+  }
+  entity "decision_candidates" as decision_candidates <<new>> {
+    * id : UUID <<PK>>
+    * user_id : UUID <<FK>>
+    * decision_execution_id : UUID <<FK>>
+    * candidate_key : UUID
+    task_id : UUID <<FK>>
+    * kind : VARCHAR(9)
+    start_at : TIMESTAMPTZ
+    end_at : TIMESTAMPTZ
+    rank : INTEGER
+    * selection_status : VARCHAR(10)
+    priority_score : NUMERIC(5, 2)
+    deadline_urgency_score : NUMERIC(5, 2)
+    energy_match_score : NUMERIC(5, 2)
+    attention_match_score : NUMERIC(5, 2)
+    task_time_score : NUMERIC(5, 2)
+    * task_snapshot : JSONB
+    explanation : VARCHAR(4000)
+    * created_at : TIMESTAMPTZ
+  }
+}
+package "Dynamic Rescheduling" #E9F5F4 {
+  entity "rescheduling_runs" as rescheduling_runs <<new>> {
+    * id : UUID <<PK>>
+    * user_id : UUID <<FK>>
+    * request_key : UUID
+    * previous_version_id : UUID <<FK>>
+    new_version_id : UUID <<FK>>
+    decision_execution_id : UUID <<FK>>
+    * trigger_type : VARCHAR(32)
+    * reason : VARCHAR(4000)
+    * status : VARCHAR(8)
+    * requested_at : TIMESTAMPTZ
+    finished_at : TIMESTAMPTZ
+  }
+  entity "rescheduling_changes" as rescheduling_changes <<new>> {
+    * id : UUID <<PK>>
+    * user_id : UUID <<FK>>
+    * rescheduling_run_id : UUID <<FK>>
+    previous_item_id : UUID <<FK>>
+    new_item_id : UUID <<FK>>
+    * change_type : VARCHAR(7)
+    explanation : VARCHAR(2000)
+    * created_at : TIMESTAMPTZ
+  }
+}
+profiles ||--o{ app_classifications : user_id\nfk_app_classifications_profile
+usage_sync_batches ||--o{ app_usage_summaries : batch_id\nfk_app_usage_summaries_batch
+profiles ||--o{ app_usage_summaries : user_id\nfk_app_usage_summaries_profile
+profiles ||--o{ attention_assessments : user_id\nfk_attention_assessments_profile
+attention_assessments ||--o{ attention_questionnaire_responses : assessment_id\nfk_attention_responses_assessment
+profiles ||--o{ attention_questionnaire_responses : user_id\nfk_attention_responses_profile
+attention_assessments |o--o{ attention_scores : assessment_id\nfk_attention_scores_assessment
+profiles ||--o{ attention_scores : user_id\nfk_attention_scores_profile
+profiles ||--o{ availability_windows : user_id\nfk_availability_profile
+decision_executions ||--o{ decision_candidates : decision_execution_id\nfk_decision_candidates_execution
+profiles ||--o{ decision_candidates : user_id\nfk_decision_candidates_profile
+tasks |o--o{ decision_candidates : task_id\nfk_decision_candidates_task
+attention_scores |o--o{ decision_executions : attention_score_id\nfk_decision_executions_attention
+energy_scores |o--o{ decision_executions : energy_score_id\nfk_decision_executions_energy
+profiles ||--o{ decision_executions : user_id\nfk_decision_executions_profile
+schedule_versions |o--o{ decision_executions : input_schedule_version_id\nfk_decision_executions_schedule
+focus_sessions ||--o{ distraction_events : focus_session_id\nfk_distraction_events_focus
+profiles ||--o{ distraction_events : user_id\nfk_distraction_events_profile
+profiles ||--o{ energy_scores : user_id\nfk_energy_scores_profile
+sleep_sessions |o--o{ energy_scores : sleep_session_id\nfk_energy_scores_sleep
+profiles ||--o{ events : user_id\nfk_events_profile
+schedule_items |o--o{ focus_sessions : schedule_item_id\nfk_focus_sessions_item
+profiles ||--o{ focus_sessions : user_id\nfk_focus_sessions_profile
+tasks |o--o{ focus_sessions : task_id\nfk_focus_sessions_task
+auth_users ||--o| profiles : id\nfk_profiles_auth_user
+focus_sessions |o--o{ recovery_periods : focus_session_id\nfk_recovery_periods_focus
+schedule_items |o--o{ recovery_periods : schedule_item_id\nfk_recovery_periods_item
+profiles ||--o{ recovery_periods : user_id\nfk_recovery_periods_profile
+recovery_strategies |o--o{ recovery_periods : strategy_id\nfk_recovery_periods_strategy
+profiles ||--o| recovery_strategies : user_id\nfk_recovery_strategies_profile
+schedule_items |o--o{ rescheduling_changes : new_item_id\nfk_rescheduling_changes_new
+schedule_items |o--o{ rescheduling_changes : previous_item_id\nfk_rescheduling_changes_previous
+profiles ||--o{ rescheduling_changes : user_id\nfk_rescheduling_changes_profile
+rescheduling_runs ||--o{ rescheduling_changes : rescheduling_run_id\nfk_rescheduling_changes_run
+decision_executions |o--o{ rescheduling_runs : decision_execution_id\nfk_rescheduling_runs_decision
+schedule_versions |o--o{ rescheduling_runs : new_version_id\nfk_rescheduling_runs_new
+schedule_versions ||--o{ rescheduling_runs : previous_version_id\nfk_rescheduling_runs_previous
+profiles ||--o{ rescheduling_runs : user_id\nfk_rescheduling_runs_profile
+events |o--o{ schedule_items : event_id\nfk_schedule_items_event
+profiles ||--o{ schedule_items : user_id\nfk_schedule_items_profile
+tasks |o--o{ schedule_items : task_id\nfk_schedule_items_task
+schedule_versions ||--o{ schedule_items : schedule_version_id\nfk_schedule_items_version
+schedule_items |o--o{ schedule_validation_issues : item_id\nfk_schedule_issues_item
+profiles ||--o{ schedule_validation_issues : user_id\nfk_schedule_issues_profile
+schedule_items |o--o{ schedule_validation_issues : related_item_id\nfk_schedule_issues_related
+schedule_versions ||--o{ schedule_validation_issues : schedule_version_id\nfk_schedule_issues_version
+decision_executions |o--o{ schedule_versions : decision_execution_id\nfk_schedule_versions_decision
+schedule_versions |o--o{ schedule_versions : parent_version_id\nfk_schedule_versions_parent
+profiles ||--o{ schedule_versions : user_id\nfk_schedule_versions_profile
+schedules ||--o{ schedule_versions : schedule_id\nfk_schedule_versions_schedule
+schedule_versions |o--o| schedules : current_version_id\nfk_schedules_current
+profiles ||--o| schedules : user_id\nfk_schedules_profile
+profiles ||--o{ sleep_quality_ratings : user_id\nfk_sleep_quality_ratings_profile
+sleep_sessions ||--o| sleep_quality_ratings : user_id, session_id\nfk_sleep_quality_ratings_session
+profiles ||--o| sleep_schedules : user_id\nfk_sleep_schedules_profile
+usage_sync_batches |o--o{ sleep_sessions : batch_id\nfk_sleep_sessions_batch
+profiles ||--o{ sleep_sessions : user_id\nfk_sleep_sessions_profile
+usage_sync_batches |o--o{ sleep_usage_signals : batch_id\nfk_sleep_usage_signals_batch
+profiles ||--o{ sleep_usage_signals : user_id\nfk_sleep_usage_signals_profile
+sleep_sessions |o--o{ sleep_usage_signals : user_id, session_id\nfk_sleep_usage_signals_session
+schedule_items |o--o{ task_outcomes : schedule_item_id\nfk_task_outcomes_item
+profiles ||--o{ task_outcomes : user_id\nfk_task_outcomes_profile
+tasks |o--o{ task_outcomes : task_id\nfk_task_outcomes_task
+profiles ||--o{ task_requirements : user_id\nfk_task_requirements_profile
+tasks ||--o| task_requirements : task_id\nfk_task_requirements_task
+profiles ||--o{ tasks : user_id\nfk_tasks_profile
+profiles ||--o{ unscheduled_tasks : user_id\nfk_unscheduled_tasks_profile
+tasks |o--o{ unscheduled_tasks : task_id\nfk_unscheduled_tasks_task
+schedule_versions ||--o{ unscheduled_tasks : schedule_version_id\nfk_unscheduled_tasks_version
+profiles ||--o{ usage_sync_batches : user_id\nfk_usage_batches_profile
+profiles ||--o| user_preferences : user_id\nfk_user_preferences_profile
+note bottom of schedule_versions
+  Publish locks the schedule and requires parent=current.
+  Published versions and presented/rejected/failed proposals freeze.
+  Source deletion may null real FKs while snapshots survive.
+end note
+note bottom of schedule_items
+  TASK/EVENT/BREAK kinds use explicit FK columns.
+  Weekly occurrences resolve both local endpoints separately.
+  Half-open intervals cannot overlap within a version.
+end note
+note bottom of focus_sessions
+  One existing shared table, now owned by Attention.
+  Energy reexports the same mapped class.
+end note
+@enduml

@@ -32,6 +32,11 @@ def managed_table_names() -> frozenset[str]:
 def load_module_models(packages: tuple[str, ...]) -> None:
     for package in dict.fromkeys(packages):
         import_module_part(package, "models")
+    # The approved planning modules share real FKs. Activating any of them must
+    # resolve the complete contract; ordinary core-only startup stays independent.
+    planning_packages = ("app.modules.energy", "app.modules.attention", "app.modules.decision", "app.modules.rescheduling")
+    if any(package == root or package.startswith(root + ".") for package in packages for root in planning_packages):
+        importlib.import_module("app.core.schema_models")
     for table in Base.metadata.tables.values():
         if table.schema != "public" or table.info.get("external"):
             raise ConfigurationError("Shared Base must contain application public tables only")

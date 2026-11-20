@@ -15,14 +15,21 @@ def api(database, signer, users):
     from app.core.config import Settings
     from app.main import create_app
 
-    state = SimpleNamespace(mode="session", status=None, requests=[], subject=users[0], metadata={"full_name": "Student"})
+    state = SimpleNamespace(mode="session", status=None, requests=[], admin_requests=[], admin_users=[],
+                            subject=users[0], metadata={"full_name": "Student"})
 
     def provider(request):
-        state.requests.append(request)
         assert request.url.host == "scheduler-tests.invalid"
-        assert request.headers["apikey"] == "sb_publishable_test"
         if state.mode == "timeout":
             raise httpx.ReadTimeout("Synthetic sensitive upstream detail", request=request)
+        if request.url.path == "/auth/v1/admin/users":
+            state.admin_requests.append(request)
+            assert request.method == "GET"
+            assert request.headers["apikey"] == "sb_secret_test_admin_fixture"
+            assert request.url.params["page"] == "1" and request.url.params["per_page"] == "100"
+            return httpx.Response(200, json={"users": state.admin_users})
+        state.requests.append(request)
+        assert request.headers["apikey"] == "sb_publishable_test"
         if state.status:
             return httpx.Response(state.status, json={"msg": "secret provider detail"}, headers={"Retry-After": "30"})
         body = json.loads(request.content)
@@ -44,7 +51,8 @@ def api(database, signer, users):
         return httpx.Response(200, json=payload)
 
     transport_client = httpx.Client(transport=httpx.MockTransport(provider))
-    app = create_app(settings=Settings(supabase_url="https://scheduler-tests.invalid", supabase_key="sb_publishable_test"),
+    app = create_app(settings=Settings(supabase_url="https://scheduler-tests.invalid", supabase_key="sb_publishable_test",
+                                      auth_admin_key="sb_secret_test_admin_fixture"),
                      database=database.runtime, verifier=signer.verifier, auth_client=transport_client)
     with TestClient(app) as client:
         yield SimpleNamespace(client=client, state=state, database=database, signer=signer, users=users,

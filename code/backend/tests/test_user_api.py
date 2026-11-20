@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 
 import pytest
 import sqlalchemy as sa
@@ -71,6 +72,28 @@ def test_auth_timeout_is_service_unavailable(api):
     response = api.client.post("/api/v1/auth/register", json=CREDS)
     assert response.status_code == 503
     assert "sensitive" not in response.text
+
+
+def test_registration_missing_private_lookup_key_remains_unavailable(api):
+    settings = api.client.app.state.settings
+    api.client.app.state.settings = replace(settings, auth_admin_key=None)
+    response = api.client.post("/api/v1/auth/register", json=CREDS)
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "registration_check_unavailable"
+    assert api.state.requests == [] and api.state.admin_requests == []
+
+
+@pytest.mark.parametrize("confirmed", [False, True])
+def test_registration_rejects_existing_email_before_public_signup(api, confirmed):
+    api.state.admin_users = [{
+        "id": str(api.users[1]), "email": CREDS["email"].upper(),
+        "aud": "authenticated", "role": "authenticated", "user_metadata": {},
+        "email_confirmed_at": "2026-11-20T00:00:00Z" if confirmed else None,
+    }]
+    response = api.client.post("/api/v1/auth/register", json=CREDS)
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "email_already_registered"
+    assert api.state.requests == []
 
 
 @pytest.mark.parametrize("path", ["profiles/me", "preferences/me", "tasks", "events"])

@@ -28,7 +28,7 @@ def create_app(*, settings: Settings | None = None, database: Database | None = 
                             allow_admin_runtime=settings.allow_admin_database_runtime)
         if settings.allow_admin_database_runtime:
             logging.getLogger("scheduler").warning(
-                "Development administrative database access enabled: RLS isolation is not enforced for this connection."
+                "Legacy administrative opt-in is ignored: runtime still requires a restricted database role."
             )
     if verifier is None and settings.supabase_url:
         verifier = SupabaseJWTVerifier(settings.supabase_url, allow_local_http=settings.environment == "development")

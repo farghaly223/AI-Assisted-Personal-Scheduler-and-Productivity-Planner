@@ -50,10 +50,11 @@ def list_probe(session: SessionDep):
     shutil.copytree(BACKEND_ROOT / "alembic", migration_dir, ignore=shutil.ignore_patterns("__pycache__"))
     cfg = Config(str(BACKEND_ROOT / "alembic.ini"))
     cfg.set_main_option("script_location", str(migration_dir))
+    base_head = ScriptDirectory.from_config(cfg).get_current_head()
     try:
         load_module_models(("app.modules.probe",))
         revision = command.revision(cfg, message="temporary module probe", autogenerate=True)
-        assert revision.down_revision == "0001_sprint1"
+        assert revision.down_revision == base_head
         text = revision.path
         source = open(text, encoding="utf-8").read()
         assert "sprint1_module_probe" in source
@@ -94,7 +95,7 @@ def list_probe(session: SessionDep):
     finally:
         # Only this task-created test database is changed. Shared source remains intact.
         if "public.sprint1_module_probe" in Base.metadata.tables:
-            command.downgrade(cfg, "0001_sprint1")
+            command.downgrade(cfg, base_head)
             Base.metadata.remove(Base.metadata.tables["public.sprint1_module_probe"])
         for module in ("app.modules.probe.models", "app.modules.probe.router", "app.modules.probe"):
             sys.modules.pop(module, None)

@@ -2,6 +2,8 @@ from datetime import date, datetime, time, timedelta, timezone
 from uuid import uuid4
 
 from alembic.autogenerate import compare_metadata
+from alembic import command
+from alembic.config import Config
 from alembic.migration import MigrationContext
 import pytest
 import sqlalchemy as sa
@@ -14,6 +16,9 @@ from app.modules.user.models import Profile, UserPreferences
 from app.core.registry import managed_table_names
 from app.core.database import Database, UnsafeDatabaseRole
 from app.core.migration_scope import explicit_schema_reflection
+from app.core.config import BACKEND_ROOT
+from scripts.provision_runtime import connect_admin
+from tests.database_support import staged_database
 
 pytestmark = pytest.mark.integration
 START = datetime(2026, 11, 16, 9, tzinfo=timezone.utc)
@@ -266,33 +271,52 @@ def test_auth_delete_cascade_in_approved_local_fixture(database, users):
         assert connection.scalar(sa.select(sa.func.count()).select_from(Profile).where(Profile.id == users[0])) == 0
 
 
-def test_migration_round_trip_preserves_external_auth(database):
-    with database.admin.connect() as connection:
-        before = connection.scalar(sa.text("SELECT pg_get_functiondef('auth.uid()'::regprocedure)"))
-        auth_oid = connection.scalar(sa.text("SELECT 'auth.users'::regclass::oid"))
-    database.migrate("downgrade", "base")
-    with database.admin.connect() as connection:
-        assert sa.inspect(connection).get_table_names(schema="public") == ["alembic_version"]
-        assert connection.scalar(sa.text("SELECT 'auth.users'::regclass::oid")) == auth_oid
-        assert connection.scalar(sa.text("SELECT pg_get_functiondef('auth.uid()'::regprocedure)")) == before
-    database.migrate("upgrade", "head")
-    database.runtime.check_connection()
+def test_migration_round_trip_preserves_external_auth(database, monkeypatch):
+    # Use a fresh empty database: 0003 correctly refuses data-discarding rollback.
+    with staged_database(database) as target:
+        monkeypatch.setenv("MIGRATION_DATABASE_URL", target.render_as_string(hide_password=False))
+        cfg = Config(str(BACKEND_ROOT / "alembic.ini"))
+        command.upgrade(cfg, "head")
+        with connect_admin(target) as connection:
+            before = connection.execute("SELECT pg_get_functiondef('auth.uid()'::regprocedure)").fetchone()[0]
+            auth_oid = connection.execute("SELECT 'auth.users'::regclass::oid").fetchone()[0]
+        command.downgrade(cfg, "base")
+        with connect_admin(target) as connection:
+            assert connection.execute("SELECT tablename FROM pg_tables WHERE schemaname='public'").fetchall() == [("alembic_version",)]
+            assert connection.execute("SELECT 'auth.users'::regclass::oid").fetchone()[0] == auth_oid
+            assert connection.execute("SELECT pg_get_functiondef('auth.uid()'::regprocedure)").fetchone()[0] == before
+        command.upgrade(cfg, "head")
 
 
 def test_rls_policies_and_provisioning_function_permissions(database):
     with database.admin.connect() as connection:
-        policies = connection.execute(sa.text("SELECT tablename, cmd, qual, with_check FROM pg_policies WHERE schemaname='public' AND tablename IN ('profiles','user_preferences','tasks','events')")).mappings().all()
-        assert len(policies) == 13
+        policies = connection.execute(sa.text("SELECT tablename, policyname, cmd, qual, with_check FROM pg_policies WHERE schemaname='public' AND tablename IN ('profiles','user_preferences','tasks','events')")).mappings().all()
+        original = {f"{name}_{operation}_own" for name,operations in (
+            ("profiles",("select","insert","update")), ("user_preferences",("select","update")),
+            ("tasks",("select","insert","update","delete")), ("events",("select","insert","update","delete")),
+        ) for operation in operations}
+        assert len(original) == 13 and original <= {p["policyname"] for p in policies}
+        assert {(p["tablename"],p["policyname"]) for p in policies if p["policyname"] not in original} == {
+            ("profiles","profiles_delete_own"), ("user_preferences","user_preferences_insert_own"),
+            ("user_preferences","user_preferences_delete_own"),
+            *((name,"dayli_owner_fence") for name in ("profiles","user_preferences","tasks","events")),
+        }
         for policy in policies:
-            if policy["cmd"] in ("SELECT", "UPDATE", "DELETE"):
+            if policy["cmd"] in ("SELECT", "UPDATE", "DELETE", "ALL"):
                 assert "auth.uid()" in policy["qual"]
-            if policy["cmd"] in ("UPDATE", "INSERT"):
+            if policy["cmd"] in ("UPDATE", "INSERT", "ALL"):
                 assert "auth.uid()" in policy["with_check"]
         assert not connection.scalar(sa.text("SELECT has_function_privilege('authenticated', 'public.scheduler_create_preferences()', 'EXECUTE')"))
         assert not connection.scalar(sa.text("SELECT has_table_privilege('anon', 'public.tasks', 'SELECT')"))
         definition = connection.execute(sa.text("SELECT prosecdef, proconfig FROM pg_proc WHERE oid='public.scheduler_create_preferences()'::regprocedure")).one()
         assert definition.prosecdef and 'search_path=""' in definition.proconfig
-        assert connection.scalar(sa.text("SELECT count(*) FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relname IN ('profiles','user_preferences','tasks','events') AND NOT t.tgisinternal")) == 7
+        triggers = connection.execute(sa.text("SELECT c.relname,t.tgname FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relname IN ('profiles','user_preferences','tasks','events') AND NOT t.tgisinternal")).all()
+        assert set(triggers) == {
+            ("profiles","profiles_updated_at"), ("profiles","profiles_create_preferences"),
+            ("user_preferences","user_preferences_updated_at"), ("user_preferences","user_preferences_validate_timezone"),
+            ("tasks","tasks_updated_at"), ("events","events_updated_at"), ("events","events_validate_timezone"),
+            *((name,"dayli_01_ownership") for name in ("profiles","user_preferences","tasks","events")),
+        }
 
 
 @pytest.mark.parametrize("model,factory,key", [(Task, task_values, "task_id"), (Event, event_values, "event_id")])

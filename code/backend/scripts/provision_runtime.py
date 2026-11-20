@@ -1,7 +1,8 @@
 """Create a separate restricted login; does not grant access to Auth user data.
 
 Run with MIGRATION_DATABASE_URL, AFTER migration. Password is read without echo.
-Remote role provisioning requires a separate explicit --allow-remote switch.
+Password-bearing role DDL is local only. Provision production credentials through
+a secured administrative workflow that does not record passwords in SQL logs.
 """
 
 import argparse
@@ -23,6 +24,8 @@ def connect_admin(url, *, autocommit=False):
 
 
 def create_restricted_role(connection, role: str, password: str) -> None:
+    if connection.info.host not in LOCAL_HOSTS:
+        raise ValueError("Remote password-bearing role DDL is disabled")
     if not re.fullmatch(r"scheduler_[a-z0-9_]{1,45}", role):
         raise ValueError("Use a dedicated scheduler_ role name")
     if not password:
@@ -32,6 +35,8 @@ def create_restricted_role(connection, role: str, password: str) -> None:
         "CREATE ROLE {} LOGIN INHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD {}"
     ).format(sql.Identifier(role), sql.Literal(password)))
     connection.execute(sql.SQL("GRANT authenticated TO {}").format(sql.Identifier(role)))
+    if connection.execute("SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='dayli_app_writer')").fetchone()[0]:
+        connection.execute(sql.SQL("GRANT dayli_app_writer TO {}").format(sql.Identifier(role)))
     database = connection.info.dbname
     connection.execute(sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(sql.Identifier(database), sql.Identifier(role)))
 
@@ -43,8 +48,8 @@ def main() -> int:
     args = parser.parse_args()
     try:
         url = database_url("MIGRATION_DATABASE_URL")
-        if url.host not in LOCAL_HOSTS and not args.allow_remote:
-            raise ValueError("Remote role provisioning requires explicit approval and --allow-remote")
+        if url.host not in LOCAL_HOSTS:
+            raise ValueError("Remote password-bearing role DDL is disabled, including --allow-remote")
         password = getpass.getpass("New restricted runtime password: ")
         if password != getpass.getpass("Confirm password: "):
             raise ValueError("Passwords do not match")

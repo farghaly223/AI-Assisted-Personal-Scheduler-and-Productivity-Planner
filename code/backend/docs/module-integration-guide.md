@@ -29,7 +29,7 @@ Do not edit `app/main.py`, `app/core/config.py`, `app/core/security.py`, `app/co
 BACKEND_MODULES=app.modules.your_module
 ```
 
-Use comma-separated package names for multiple modules. The application imports models.py and router.py; Alembic imports the same models from the same configuration. Keep __init__.py free of engine creation or side effects. If adding a shared requirement is actually necessary, propose it in a separate reviewed foundation change rather than silently modifying shared files.
+Use comma-separated package names for multiple modules. The application imports registered models.py/router.py; Alembic always imports the approved complete schema plus configured extra module models. Keep __init__.py free of engine creation or side effects. If adding a shared requirement is actually necessary, propose it in a separate reviewed foundation change rather than silently modifying shared files.
 
 For a new package, these commands create only absent files; fill them using the patterns below:
 
@@ -99,3 +99,8 @@ Run migrations only against your disposable/local development database. Read dat
 Shared pytest fixtures `database`, `signer`, `users`, and `api` are available from conftest.py. Use database.runtime and signed identities for normal operations; admin is fixture setup only. Tests may bootstrap Auth only in their newly created loopback test database. Test valid/invalid input, persistence, cross-user reads/edits/deletes, transaction cleanup, query counts and migration consistency. For API tests, instantiate create_app with the test runtime and verifier.
 
 `tests/test_module_integration.py` demonstrates a temporary package, real migration autogeneration from the shared environment, one revision ancestry, router registration, shared dependencies, and RLS. Temporary model/source/migration changes live in pytest's temporary directory; no teammate business module is installed into production code.
+
+
+## Final database contract
+
+The shared head is `0003_dayli_foundation`, above the deployed `0002_energy`. Reuse existing entities in [the complete dictionary](database-data-dictionary.md); consult [ownership/security and the one manual upgrade](database-migrations.md) before adding tables. Import `app.core.schema_models` when using cross-module planning models; registry activation resolves the full contract for Energy/Attention/Decision/Rescheduling. Each owning module writes through its service interface. Attention owns the one Focus Session class/table, reexported by Energy. Existing Task/Event API fields remain unchanged. No additional schema history or duplicate Auth/User/Task/Event/Focus entity is permitted.
