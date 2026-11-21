@@ -39,6 +39,20 @@ SCHEDULE_PREVIEW = {"range_start": "2026-11-23T00:00:00Z", "range_end": "2026-11
                    "conflicts_count": 0, "completion_ratio": 1.0}}
 SCHEDULE_GENERATED = SCHEDULE_PREVIEW | {"version_id": ID, "version_number": 1, "status": "PUBLISHED",
                                          "published_at": "2026-11-23T08:00:00Z"}
+SCHEDULE_ITEM = {"id": ID, "kind": "TASK", "task_id": ID, "event_id": None, "title": "Study Database",
+    "start_at": "2026-11-23T09:00:00Z", "end_at": "2026-11-23T10:30:00Z", "is_locked": False,
+    "event_occurrence_date": None}
+CURRENT_SCHEDULE = {"version": {"version_id": ID, "version_number": 1, "origin": "GENERATED", "status": "PUBLISHED",
+    "window_start_at": "2026-11-23T00:00:00Z", "window_end_at": "2026-11-24T00:00:00Z", "timezone": "Africa/Cairo",
+    "published_at": "2026-11-23T08:00:00Z", "explanation": None},
+    "items": [SCHEDULE_ITEM],
+    "unscheduled": [{"task_id": ID, "title": "Assignment", "reason_code": "NO_SLOT_LONG_ENOUGH",
+                     "explanation": "No single free slot before the deadline is long enough for this task"}]}
+DAY_SCHEDULE = {"date": "2026-11-23", "timezone": "Africa/Cairo", "version_id": ID, "items": [SCHEDULE_ITEM]}
+WEEK_SCHEDULE = {"week_start": "2026-11-23", "week_end": "2026-11-29", "timezone": "Africa/Cairo",
+                 "version_id": ID, "days": [DAY_SCHEDULE]}
+ITEM_MOVE = {"start_at": "2026-11-23T12:00:00Z", "explanation": "Moved after lunch"}
+ITEM_NOTE = {"explanation": "Keep this session at its time"}
 AUTH = {"user": {"id": ID, "email": "student@example.com"}, "confirmation_required": False,
     "session": {"access_token": "REPLACE_WITH_ACCESS_TOKEN", "refresh_token": "REPLACE_WITH_REFRESH_TOKEN",
                 "token_type": "bearer", "expires_in": 3600, "expires_at": 1794823200}}
@@ -79,6 +93,14 @@ def build_openapi(application):
                 result = AVAILABILITY
             elif path == "/api/v1/scheduler/generate/preview":
                 result, body = SCHEDULE_PREVIEW, GENERATE_REQUEST
+            elif path == "/api/v1/scheduler/current":
+                result = CURRENT_SCHEDULE
+            elif path == "/api/v1/scheduler/daily":
+                result = DAY_SCHEDULE
+            elif path == "/api/v1/scheduler/weekly":
+                result = WEEK_SCHEDULE
+            elif path.startswith("/api/v1/scheduler/items/"):
+                result, body = CURRENT_SCHEDULE, (ITEM_MOVE if method == "patch" else ITEM_NOTE)    
             elif path in ("/api/v1/scheduler/generate", "/api/v1/scheduler/regenerate"):
                 result, body = SCHEDULE_GENERATED, GENERATE_REQUEST
             if result is None:
@@ -112,8 +134,7 @@ def build_openapi(application):
                 elif status == "429":
                     response["headers"] = {"Retry-After": {"schema": {"type": "string"}, "description": "Retry delay in seconds when supplied by the Auth provider"}}
             for parameter in operation.get("parameters", []):
-                if parameter["name"] in ("task_id", "event_id"):
-                    parameter["example"] = ID
+                if parameter["name"] in ("task_id", "event_id", "item_id"):                    parameter["example"] = ID
                 elif parameter["name"] in ("limit", "offset"):
                     parameter["example"] = 50 if parameter["name"] == "limit" else 0
     # Omission is allowed for PATCH, explicit null is forbidden for required values.

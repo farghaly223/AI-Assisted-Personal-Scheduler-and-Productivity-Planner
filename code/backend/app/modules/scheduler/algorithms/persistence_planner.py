@@ -32,6 +32,7 @@ class ItemRow:
     end_at: datetime
     is_locked: bool
     logical_key: UUID
+    label: str | None = None
 
 
 def _signature(kind, source_id, occurrence_date, start, end):
