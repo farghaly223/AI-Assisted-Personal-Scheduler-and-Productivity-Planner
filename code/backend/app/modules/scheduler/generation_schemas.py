@@ -57,3 +57,10 @@ class SchedulePreviewRead(Contract):
     unscheduled: list[UnscheduledRead]
     issues: list[IssueRead]
     statistics: StatisticsRead
+
+
+class GeneratedRead(SchedulePreviewRead):
+    version_id: UUID
+    version_number: int
+    status: Literal["DRAFT", "PUBLISHED"]
+    published_at: datetime | None = None

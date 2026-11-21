@@ -1,7 +1,7 @@
 """Schedule builder and analyzer: combine fixed commitments and allocated tasks into one schedule."""
 
-from dataclasses import dataclass, field
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import date, datetime
 from uuid import UUID
 
 from app.modules.scheduler.algorithms.availability_calculator import calculate_available_slots, expand_availability
@@ -21,6 +21,9 @@ class ScheduleItem:
     is_fixed: bool
     session_number: int | None = None
     deadline: datetime | None = None
+    occurrence_date: date | None = None  # weekly event occurrences only
+    is_locked: bool = False
+    logical_key: UUID | None = None  # identity kept across schedule versions
 
 
 @dataclass(frozen=True)
@@ -56,12 +59,17 @@ def _minutes(start: datetime, end: datetime) -> int:
 
 
 def filter_schedulable_tasks(tasks, excluded_task_ids=frozenset()):
-    """Split tasks into (flexible tasks to place, fixed tasks that are commitments)."""
+    """Split tasks into (flexible tasks to place, fixed tasks that are commitments).
+
+    Excluded (completed/skipped) tasks are dropped from the flexible list only: a FIXED task
+    always stays in the schedule because the database requires its placement to be preserved.
+    """
     flexible, fixed = [], []
     for task in tasks:
-        if task.task_id in excluded_task_ids:
-            continue
-        (fixed if task.task_type == "FIXED" else flexible).append(task)
+        if task.task_type == "FIXED":
+            fixed.append(task)
+        elif task.task_id not in excluded_task_ids:
+            flexible.append(task)
     return flexible, fixed
 
 
@@ -81,17 +89,27 @@ def analyze_schedule(items, issues, unscheduled_count, flexible_total, free_befo
 
 
 def build_schedule(*, windows, events, tasks, range_start: datetime, range_end: datetime, now: datetime,
-                   requirements=None, excluded_task_ids=frozenset()) -> ScheduleResult:
-    """requirements maps task_id -> object with can_split and minimum_session_minutes."""
+                   requirements=None, excluded_task_ids=frozenset(), busy_range=None,
+                   carried_items=()) -> ScheduleResult:
+    """requirements maps task_id -> object with can_split and minimum_session_minutes.
+
+    busy_range: wider (start, end) used to collect events/fixed tasks; free time is still only
+    taken from [range_start, range_end]. carried_items: placements copied unchanged from the
+    previous version (locked or completed); their tasks are not planned again.
+    """
     requirements = requirements or {}
+    busy_start, busy_end = busy_range or (range_start, range_end)
     flexible, fixed = filter_schedulable_tasks(tasks, excluded_task_ids)
+    carried_ids = {item.source_id for item in carried_items}
+    flexible = [task for task in flexible if task.task_id not in carried_ids]
     titles = {event.event_id: event.title for event in events} | {task.task_id: task.title for task in tasks}
     deadlines = {task.task_id: task.deadline for task in tasks}
 
-    busy = calculate_busy_blocks(events, fixed, range_start, range_end)
+    busy = calculate_busy_blocks(events, fixed, busy_start, busy_end)
     start = max(range_start, now)  # never schedule in the past
     availability = expand_availability(windows, start, range_end)
-    free = calculate_available_slots(windows, [block.interval for block in busy], start, range_end)
+    blocked = [block.interval for block in busy] + [Interval(item.start, item.end) for item in carried_items]
+    free = calculate_available_slots(windows, blocked, start, range_end)
 
     to_place = []
     for task in flexible:
@@ -104,8 +122,10 @@ def build_schedule(*, windows, events, tasks, range_start: datetime, range_end: 
 
     items = [ScheduleItem(block.kind, block.source_id, titles[block.source_id], block.interval.start,
                           block.interval.end, True,
-                          deadline=deadlines.get(block.source_id) if block.kind == "TASK" else None)
+                          deadline=deadlines.get(block.source_id) if block.kind == "TASK" else None,
+                          occurrence_date=block.occurrence_date, is_locked=True)
              for block in busy]
+    items += list(carried_items)
     items += [ScheduleItem("TASK", p.task_id, titles[p.task_id], p.start, p.end, False,
                            session_number=p.session_number, deadline=deadlines[p.task_id])
               for p in allocation.placements]

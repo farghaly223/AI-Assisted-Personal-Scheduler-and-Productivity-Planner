@@ -37,6 +37,8 @@ SCHEDULE_PREVIEW = {"range_start": "2026-11-23T00:00:00Z", "range_end": "2026-11
     "statistics": {"scheduled_tasks": 1, "unscheduled_tasks": 0, "total_scheduled_minutes": 90,
                    "available_minutes": 480, "unused_minutes": 390, "deadline_violations": 0,
                    "conflicts_count": 0, "completion_ratio": 1.0}}
+SCHEDULE_GENERATED = SCHEDULE_PREVIEW | {"version_id": ID, "version_number": 1, "status": "PUBLISHED",
+                                         "published_at": "2026-11-23T08:00:00Z"}
 AUTH = {"user": {"id": ID, "email": "student@example.com"}, "confirmation_required": False,
     "session": {"access_token": "REPLACE_WITH_ACCESS_TOKEN", "refresh_token": "REPLACE_WITH_REFRESH_TOKEN",
                 "token_type": "bearer", "expires_in": 3600, "expires_at": 1794823200}}
@@ -76,7 +78,9 @@ def build_openapi(application):
             elif path == "/api/v1/scheduler/availability":
                 result = AVAILABILITY
             elif path == "/api/v1/scheduler/generate/preview":
-                result, body = SCHEDULE_PREVIEW, GENERATE_REQUEST    
+                result, body = SCHEDULE_PREVIEW, GENERATE_REQUEST
+            elif path in ("/api/v1/scheduler/generate", "/api/v1/scheduler/regenerate"):
+                result, body = SCHEDULE_GENERATED, GENERATE_REQUEST
             if result is None:
                 continue  # Module authors provide their own documented examples.
             if method in ("post", "patch"):

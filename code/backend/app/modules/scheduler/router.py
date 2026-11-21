@@ -3,5 +3,5 @@ from fastapi import APIRouter
 from app.modules.scheduler.routers import availability, events, generation, tasks
 
 router = APIRouter()
-for child_router in (tasks.router, events.router, availability.router, generation.router):
+for child_router in (tasks.router, events.router, availability.router, generation.router, generation.regenerate_router):
     router.include_router(child_router)
