@@ -29,6 +29,10 @@ Public endpoints: health, register, verify-otp, resend-otp, login, refresh. All 
 | GET | `/events/{event_id}` | UUID path, no body | 200 EventRead |
 | PATCH | `/events/{event_id}` | `{"title":"Updated lecture"}` | 200 updated EventRead |
 | DELETE | `/events/{event_id}` | UUID path, no body | 204, empty body; whole weekly rule |
+| PUT | `/energy/sleep-schedule` | Sleep schedule PUT example below | 200 SleepScheduleRead; creates or replaces schedule, always sets is_active=true |
+| GET | `/energy/sleep-schedule` | Bearer, no body | 200 SleepScheduleRead; 404 if no schedule exists |
+| PATCH | `/energy/sleep-schedule/toggle` | `{"is_active":false}` | 200 updated SleepScheduleRead; 404 if no schedule exists |
+| DELETE | `/energy/sleep-schedule` | Bearer, no body | 204, empty body; disables schedule (sets is_active=false), 404 if none |
 
 ## Authentication example
 
@@ -114,6 +118,46 @@ EventRead returns the submitted shape with event_id, verified user_id, source MA
 
 First and bounded final endpoints reject DST ambiguity/nonexistence. The backend does not expand all intervening/future occurrences; consumers must resolve each interpreted endpoint in its timezone and validate positive UTC duration. Changing preferences timezone does not move an existing rule. PATCH changes the whole rule and must clear incompatible fields when switching recurrence type. A lecture/shift is an Event and never creates a duplicate Task.
 
+## Sleep schedule examples and validation
+
+PUT request body (`extra='forbid'`, `user_id` forbidden):
+
+```json
+{"bedtime":"23:00","wake_time":"07:00","timezone":"Africa/Cairo","repeat_days":[0,1,2,3,4,5,6],"bedtime_reminder_enabled":true,"reminder_minutes_before":15,"wake_alarm_enabled":true}
+```
+
+SleepScheduleRead response:
+
+```json
+{
+  "id":"00000000-0000-4000-8000-000000000001",
+  "bedtime":"23:00:00",
+  "wake_time":"07:00:00",
+  "timezone":"Africa/Cairo",
+  "repeat_days":[0,1,2,3,4,5,6],
+  "bedtime_reminder_enabled":true,
+  "reminder_minutes_before":15,
+  "wake_alarm_enabled":true,
+  "is_active":true,
+  "created_at":"2026-11-21T15:00:00Z",
+  "updated_at":"2026-11-21T15:00:00Z"
+}
+```
+
+`PUT /energy/sleep-schedule` creates or replaces the caller's schedule (one row per user; safe under concurrent requests relying on `uq_sleep_schedules_user_id`). PUT always sets `is_active=true` (re-enabling a disabled schedule).
+
+Validation:
+- `bedtime` and `wake_time` are `HH:MM(:SS)` local wall times without UTC offset or microseconds, and must differ. Overnight schedules (`bedtime > wake_time`) are valid.
+- `timezone` must be a valid IANA timezone name without leading or trailing spaces.
+- `repeat_days` is a non-empty list of strict integers `0..6`, deduplicated and stored sorted.
+- `reminder_minutes_before` between 0 and 180 (default 15).
+- `bedtime_reminder_enabled` and `wake_alarm_enabled` are strict booleans (default true).
+- Extra fields and `user_id` in the body are rejected with 422.
+
+Toggle and disable:
+- `PATCH /energy/sleep-schedule/toggle` accepts `{"is_active": bool}` (strict boolean). Returns updated `SleepScheduleRead`; returns 404 if no schedule exists.
+- `DELETE /energy/sleep-schedule` disables the schedule (sets `is_active=false`, keeps settings). Returns 204 with empty body. Idempotent on already-disabled schedule; returns 404 if no schedule exists.
+
 ## Pagination and errors
 
 ```json
@@ -137,6 +181,8 @@ curl.exe -X POST http://127.0.0.1:8000/api/v1/auth/login -H 'Content-Type: appli
 curl.exe http://127.0.0.1:8000/api/v1/profiles/me -H 'Authorization: Bearer REPLACE_ACCESS_TOKEN'
 curl.exe -X POST http://127.0.0.1:8000/api/v1/tasks -H 'Authorization: Bearer REPLACE_ACCESS_TOKEN' -H 'Content-Type: application/json' --data-binary '@task.json'
 curl.exe 'http://127.0.0.1:8000/api/v1/events?recurrence_type=WEEKLY&limit=50' -H 'Authorization: Bearer REPLACE_ACCESS_TOKEN'
+curl.exe -X PUT http://127.0.0.1:8000/api/v1/energy/sleep-schedule -H 'Authorization: Bearer REPLACE_ACCESS_TOKEN' -H 'Content-Type: application/json' --data-binary '@sleep_schedule.json'
+curl.exe http://127.0.0.1:8000/api/v1/energy/sleep-schedule -H 'Authorization: Bearer REPLACE_ACCESS_TOKEN'
 ```
 
 Store example request JSON in temporary local files, keep real passwords/tokens out of source control, and use Swagger's Authorize button for interactive tests. The backend APIs are ready for teammate integration; no client-side implementation is supplied.
