@@ -53,6 +53,21 @@ WEEK_SCHEDULE = {"week_start": "2026-11-23", "week_end": "2026-11-29", "timezone
                  "version_id": ID, "days": [DAY_SCHEDULE]}
 ITEM_MOVE = {"start_at": "2026-11-23T12:00:00Z", "explanation": "Moved after lunch"}
 ITEM_NOTE = {"explanation": "Keep this session at its time"}
+VALIDATE_REQUEST = {"items": [{"kind": "TASK", "task_id": ID, "start_at": "2026-11-23T09:00:00Z",
+                               "end_at": "2026-11-23T10:30:00Z"}]}
+VALIDATE_RESULT = {"is_valid": False, "issues": [{"severity": "ERROR", "code": "OVERLAPS_COMMITMENT",
+    "message": "Overlaps 'Lecture'", "item_index": 0, "task_id": ID}]}
+CONFLICTS = {"version_id": ID, "version_number": 1, "checked_at": "2026-11-23T08:00:00Z", "has_blocking": False,
+    "issues": [{"severity": "INFO", "code": "NEW_COMMITMENT",
+                "message": "A commitment was added or changed after the schedule was generated",
+                "item_id": None, "source_id": ID, "title": "Meeting"}]}
+STATISTICS = {"version_id": ID, "version_number": 1, "window_start_at": "2026-11-23T00:00:00Z",
+    "window_end_at": "2026-11-24T00:00:00Z", "scheduled_tasks": 2, "unscheduled_tasks": 1,
+    "total_scheduled_minutes": 150, "committed_minutes": 120, "available_minutes": 480, "unused_minutes": 210,
+    "locked_items": 0, "completion_ratio": 0.6667}
+WINDOW_INPUT = {"weekday": 0, "start_time": "09:00:00", "end_time": "17:00:00", "timezone": "Africa/Cairo"}
+WINDOW = WINDOW_INPUT | {"id": ID, "user_id": ID, "valid_from": None, "valid_until": None,
+                         "created_at": STAMP, "updated_at": STAMP}
 AUTH = {"user": {"id": ID, "email": "student@example.com"}, "confirmation_required": False,
     "session": {"access_token": "REPLACE_WITH_ACCESS_TOKEN", "refresh_token": "REPLACE_WITH_REFRESH_TOKEN",
                 "token_type": "bearer", "expires_in": 3600, "expires_at": 1794823200}}
@@ -101,6 +116,14 @@ def build_openapi(application):
                 result = WEEK_SCHEDULE
             elif path.startswith("/api/v1/scheduler/items/"):
                 result, body = CURRENT_SCHEDULE, (ITEM_MOVE if method == "patch" else ITEM_NOTE)    
+            elif path == "/api/v1/scheduler/validate":
+                result, body = VALIDATE_RESULT, VALIDATE_REQUEST
+            elif path == "/api/v1/scheduler/conflicts":
+                result = CONFLICTS
+            elif path == "/api/v1/scheduler/statistics":
+                result = STATISTICS
+            elif path.startswith("/api/v1/scheduler/availability-windows"):
+                result, body = WINDOW, (WINDOW_INPUT if method == "post" else {"end_time": "18:00:00"})    
             elif path in ("/api/v1/scheduler/generate", "/api/v1/scheduler/regenerate"):
                 result, body = SCHEDULE_GENERATED, GENERATE_REQUEST
             if result is None:
@@ -109,8 +132,7 @@ def build_openapi(application):
                 operation["requestBody"]["content"]["application/json"]["examples"] = examples(body)
                 if path == "/api/v1/events" and method == "post":
                     operation["requestBody"]["content"]["application/json"]["examples"]["weekly"] = {"summary": "Overnight weekly timetable", "value": deepcopy(WEEKLY_INPUT)}
-            if method == "get" and path in ("/api/v1/tasks", "/api/v1/events"):
-                result = {"items": [result], "limit": 50, "offset": 0, "has_more": False}
+            if method == "get" and path in ("/api/v1/tasks", "/api/v1/events", "/api/v1/scheduler/availability-windows"):                result = {"items": [result], "limit": 50, "offset": 0, "has_more": False}
             for status, response in operation["responses"].items():
                 if status == "204":
                     continue
@@ -134,7 +156,7 @@ def build_openapi(application):
                 elif status == "429":
                     response["headers"] = {"Retry-After": {"schema": {"type": "string"}, "description": "Retry delay in seconds when supplied by the Auth provider"}}
             for parameter in operation.get("parameters", []):
-                if parameter["name"] in ("task_id", "event_id", "item_id"):                    parameter["example"] = ID
+                if parameter["name"] in ("task_id", "event_id", "item_id", "window_id"):                                    parameter["example"] = ID
                 elif parameter["name"] in ("limit", "offset"):
                     parameter["example"] = 50 if parameter["name"] == "limit" else 0
     # Omission is allowed for PATCH, explicit null is forbidden for required values.
