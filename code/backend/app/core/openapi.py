@@ -23,6 +23,11 @@ EVENT = ONCE_INPUT | {"event_id": ID, "user_id": ID, "location": None, "recurren
     "status": "SAVED", "recurrence_first_date": None, "recurrence_until_date": None, "recurrence_start_time": None,
     "recurrence_end_time": None, "recurrence_end_day_offset": None, "recurrence_timezone": None, "weekday": None,
     "created_at": STAMP, "updated_at": STAMP}
+AVAILABILITY = {"range_start": "2026-11-23T00:00:00Z", "range_end": "2026-11-24T00:00:00Z",
+    "slots": [{"start_at": "2026-11-23T09:00:00Z", "end_at": "2026-11-23T11:00:00Z", "duration_minutes": 120}],
+    "busy": [{"kind": "EVENT", "source_id": ID, "start_at": "2026-11-23T11:00:00Z",
+              "end_at": "2026-11-23T13:00:00Z", "occurrence_date": "2026-11-23"}],
+    "total_available_minutes": 120}
 AUTH = {"user": {"id": ID, "email": "student@example.com"}, "confirmation_required": False,
     "session": {"access_token": "REPLACE_WITH_ACCESS_TOKEN", "refresh_token": "REPLACE_WITH_REFRESH_TOKEN",
                 "token_type": "bearer", "expires_in": 3600, "expires_at": 1794823200}}
@@ -59,6 +64,8 @@ def build_openapi(application):
                 result, body = TASK, TASK_INPUT if method == "post" else {"priority": 5}
             elif path.startswith("/api/v1/events"):
                 result, body = EVENT, ONCE_INPUT if method == "post" else {"title": "Updated commitment"}
+            elif path == "/api/v1/scheduler/availability":
+                result = AVAILABILITY
             if result is None:
                 continue  # Module authors provide their own documented examples.
             if method in ("post", "patch"):
