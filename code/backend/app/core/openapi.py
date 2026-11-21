@@ -28,6 +28,15 @@ AVAILABILITY = {"range_start": "2026-11-23T00:00:00Z", "range_end": "2026-11-24T
     "busy": [{"kind": "EVENT", "source_id": ID, "start_at": "2026-11-23T11:00:00Z",
               "end_at": "2026-11-23T13:00:00Z", "occurrence_date": "2026-11-23"}],
     "total_available_minutes": 120}
+GENERATE_REQUEST = {"start": "2026-11-23T00:00:00Z", "end": "2026-11-24T00:00:00Z"}
+SCHEDULE_PREVIEW = {"range_start": "2026-11-23T00:00:00Z", "range_end": "2026-11-24T00:00:00Z",
+    "generated_at": "2026-11-23T08:00:00Z", "is_publishable": True,
+    "items": [{"kind": "TASK", "source_id": ID, "title": "Study Database", "start_at": "2026-11-23T09:00:00Z",
+               "end_at": "2026-11-23T10:30:00Z", "is_fixed": False, "session_number": 1}],
+    "unscheduled": [], "issues": [],
+    "statistics": {"scheduled_tasks": 1, "unscheduled_tasks": 0, "total_scheduled_minutes": 90,
+                   "available_minutes": 480, "unused_minutes": 390, "deadline_violations": 0,
+                   "conflicts_count": 0, "completion_ratio": 1.0}}
 AUTH = {"user": {"id": ID, "email": "student@example.com"}, "confirmation_required": False,
     "session": {"access_token": "REPLACE_WITH_ACCESS_TOKEN", "refresh_token": "REPLACE_WITH_REFRESH_TOKEN",
                 "token_type": "bearer", "expires_in": 3600, "expires_at": 1794823200}}
@@ -66,6 +75,8 @@ def build_openapi(application):
                 result, body = EVENT, ONCE_INPUT if method == "post" else {"title": "Updated commitment"}
             elif path == "/api/v1/scheduler/availability":
                 result = AVAILABILITY
+            elif path == "/api/v1/scheduler/generate/preview":
+                result, body = SCHEDULE_PREVIEW, GENERATE_REQUEST    
             if result is None:
                 continue  # Module authors provide their own documented examples.
             if method in ("post", "patch"):
