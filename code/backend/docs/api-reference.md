@@ -33,6 +33,15 @@ Public endpoints: health, register, verify-otp, resend-otp, login, refresh. All 
 | GET | `/energy/sleep-schedule` | Bearer, no body | 200 SleepScheduleRead; 404 if no schedule exists |
 | PATCH | `/energy/sleep-schedule/toggle` | `{"is_active":false}` | 200 updated SleepScheduleRead; 404 if no schedule exists |
 | DELETE | `/energy/sleep-schedule` | Bearer, no body | 204, empty body; disables schedule (sets is_active=false), 404 if none |
+| POST | `/energy/sleep/sessions` | Session create example below | 201 SleepSessionRead; manual session entry |
+| GET | `/energy/sleep/sessions` | `?limit=50&offset=0&status=confirmed` | 200 Page of SleepSessionRead |
+| GET | `/energy/sleep/pending-confirmation` | Bearer, no body | 200 list of SleepSessionRead awaiting confirmation |
+| GET | `/energy/sleep/sessions/{id}` | UUID path, no body | 200 SleepSessionRead; 404 if not found or other user |
+| PATCH | `/energy/sleep/sessions/{id}/confirm` | `{"status":"confirmed"}` or corrections | 200 updated SleepSessionRead |
+| DELETE | `/energy/sleep/sessions/{id}` | UUID path, no body | 204, empty body; cascade deletes ratings |
+| POST | `/energy/sleep/sessions/{id}/quality` | `{"rating":4}` | 201 SleepQualityRead |
+| PATCH | `/energy/sleep/sessions/{id}/quality` | `{"rating":5}` | 200 updated SleepQualityRead |
+| GET | `/energy/sleep/quality/history` | `?limit=50&date_from=2026-11-01` | 200 Page of SleepQualityHistoryItem |
 
 ## Authentication example
 
@@ -157,6 +166,71 @@ Validation:
 Toggle and disable:
 - `PATCH /energy/sleep-schedule/toggle` accepts `{"is_active": bool}` (strict boolean). Returns updated `SleepScheduleRead`; returns 404 if no schedule exists.
 - `DELETE /energy/sleep-schedule` disables the schedule (sets `is_active=false`, keeps settings). Returns 204 with empty body. Idempotent on already-disabled schedule; returns 404 if no schedule exists.
+
+## Sleep sessions and quality examples and validation
+
+Manual session entry (`POST /energy/sleep/sessions`):
+
+```json
+{"start_time":"2026-11-20T21:00:00Z","end_time":"2026-11-21T05:00:00Z","timezone":"Africa/Cairo"}
+```
+
+SleepSessionRead response:
+
+```json
+{
+  "id":"00000000-0000-4000-8000-000000000001",
+  "start_time":"2026-11-20T21:00:00Z",
+  "end_time":"2026-11-21T05:00:00Z",
+  "duration_minutes":480,
+  "timezone":"Africa/Cairo",
+  "sleep_date":"2026-11-21",
+  "source":"manual",
+  "confidence":1.0,
+  "status":"confirmed",
+  "created_at":"2026-11-21T05:00:00Z",
+  "updated_at":"2026-11-21T05:00:00Z",
+  "quality_rating":null,
+  "quality_score":null
+}
+```
+
+Validation and rules for sessions:
+- `start_time` and `end_time` must be timezone-aware (instant) with `end_time > start_time`.
+- `duration_minutes` must be between 30 minutes and 24 hours (1440 minutes). Stored in UTC.
+- `duration_minutes` is computed using integer microseconds and `Decimal ROUND_HALF_UP` satisfying PostgreSQL CHECK constraint.
+- `sleep_date` is the local calendar date of `end_time` resolved in the session's IANA `timezone`.
+- Server sets `source='manual'`, `status='confirmed'`, and `confidence=1.0`.
+- 409 is returned on duplicate interval (`user_id, start_time, end_time`) or if a non-rejected session already exists for that `sleep_date`.
+- Rejecting a session frees its `sleep_date` so a new session can be recorded for that date.
+- Confirm/edit (`PATCH /energy/sleep/sessions/{id}/confirm`) accepts `{"status": "confirmed"|"rejected", optional start_time, end_time, timezone}`. Corrections are only permitted with `status="confirmed"`. Recomputes duration and `sleep_date`. Valid transitions: `pending_confirmation -> confirmed|rejected`, `confirmed -> confirmed` (edit). Any transition from `rejected` or `confirmed -> rejected` returns 409.
+- Hard delete (`DELETE /energy/sleep/sessions/{id}`) returns 204 and cascade deletes any associated quality ratings.
+
+Quality rating (`POST /energy/sleep/sessions/{id}/quality`):
+
+```json
+{"rating":4}
+```
+
+SleepQualityRead response:
+
+```json
+{
+  "session_id":"00000000-0000-4000-8000-000000000001",
+  "rating":4,
+  "quality_score":75.0,
+  "created_at":"2026-11-21T05:30:00Z",
+  "updated_at":"2026-11-21T05:30:00Z"
+}
+```
+
+Validation and rules for quality:
+- `rating` must be a strict integer between 1 and 5. Booleans, floats, strings, 0, and numbers > 5 are rejected with 422.
+- Session must be `status='confirmed'`; rating a pending or rejected session returns 409.
+- Submitting a second rating returns 409. Use `PATCH /energy/sleep/sessions/{id}/quality` to update an existing rating.
+- Quality score is normalized to {0.0, 25.0, 50.0, 75.0, 100.0} via `normalize_sleep_quality`.
+- The database `notes` column is not exposed in any API contract.
+- Quality history (`GET /energy/sleep/quality/history`) returns a paginated list (`Page[SleepQualityHistoryItem]`), newest first, with optional `date_from` and `date_to` bounds.
 
 ## Pagination and errors
 
