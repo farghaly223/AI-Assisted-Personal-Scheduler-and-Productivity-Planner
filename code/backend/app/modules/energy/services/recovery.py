@@ -16,12 +16,18 @@ from sqlalchemy.orm import Session
 
 from app.core.errors import APIError
 from app.core.timezones import resolve_unambiguous_local_time, validate_timezone_name
-from app.modules.energy.algorithms.recovery.recovery_detector import detect_actual_recovery
+from app.modules.energy.algorithms.recovery.recovery_detector import (
+    RecoveryDetection,
+    detect_actual_recovery,
+)
 from app.modules.energy.algorithms.recovery.recovery_planner import (
     StrategyParams,
     calculate_planned_recovery,
 )
-from app.modules.energy.algorithms.recovery.recovery_scorer import calculate_recovery_score
+from app.modules.energy.algorithms.recovery.recovery_scorer import (
+    RecoveryScore,
+    calculate_recovery_score,
+)
 from app.modules.energy.algorithms.sleep.sleep_detector import calculate_duration_minutes
 from app.modules.energy.models import FocusSession, RecoveryPeriod, RecoveryStrategy
 from app.modules.energy.schemas import (
@@ -353,27 +359,32 @@ def list_recovery_periods(
     }
 
 
-def detect_recovery(
+def compute_recovery_for_day(
     session: Session,
     user_id: UUID,
-    payload: RecoveryDetectRequest,
-) -> dict:
-    # 1. Lock the user's recovery_strategies row to serialize concurrent detects per user
-    strategy_row = session.scalar(
-        sa.select(RecoveryStrategy)
-        .where(
-            RecoveryStrategy.user_id == user_id,
-            RecoveryStrategy.is_active == True,
-        )
-        .with_for_update()
-    )
+    target_date: date,
+    timezone_name: str,
+    workload_level: str | None = None,
+    strategy_row: RecoveryStrategy | None = None,
+) -> tuple[RecoveryDetection, RecoveryScore, bool] | None:
+    """Compute recovery detection and score for a user on a given local date without writing to DB.
+
+    Returns (detection, score, truncated) or None if no active recovery strategy is configured.
+    """
     if strategy_row is None:
-        raise APIError(409, "recovery_strategy_not_configured", "Recovery strategy is not configured")
+        strategy_row = session.scalar(
+            sa.select(RecoveryStrategy).where(
+                RecoveryStrategy.user_id == user_id,
+                RecoveryStrategy.is_active == True,
+            )
+        )
+        if strategy_row is None:
+            return None
 
-    # 2. Local day bounds in UTC
-    day_start_utc, day_end_utc = get_local_day_bounds(payload.date, payload.timezone)
+    # Local day bounds in UTC
+    day_start_utc, day_end_utc = get_local_day_bounds(target_date, timezone_name)
 
-    # 3. Load COMPLETED focus sessions starting on that local day
+    # Load COMPLETED focus sessions starting on that local day
     stmt = (
         sa.select(FocusSession)
         .where(
@@ -383,37 +394,35 @@ def detect_recovery(
             FocusSession.start_time < day_end_utc,
         )
         .order_by(FocusSession.start_time.asc(), FocusSession.id.asc())
+        .limit(25)
     )
     all_sessions = session.scalars(stmt).all()
     truncated = len(all_sessions) > 24
     sessions = all_sessions[:24]
 
-    # 4. If < 2 sessions: UNKNOWN status, delete nothing, insert nothing
+    # If < 2 sessions: UNKNOWN status
     if len(sessions) < 2:
-        score_obj = calculate_recovery_score(
-            detection=type("DummyDetection", (), {"data_status": "UNKNOWN"})(),
-            workload_level=payload.workload_level,
+        dummy_detection = RecoveryDetection(
+            breaks=(),
+            observed_recovery_minutes=0.0,
+            capped_recovery_minutes=0.0,
+            planned_recovery_minutes=0.0,
+            missed_breaks=0,
+            shortened_breaks=0,
+            extended_breaks=0,
+            taken_breaks=0,
+            completion_ratio=None,
+            data_status="UNKNOWN",
+            consecutive_focus_sessions_without_long_break=len(sessions),
+            long_break_after_sessions=strategy_row.long_break_after_sessions,
         )
-        return {
-            "data_status": "UNKNOWN",
-            "breaks": [],
-            "observed_recovery_minutes": 0.0,
-            "planned_recovery_minutes": 0.0,
-            "missed_breaks": 0,
-            "shortened_breaks": 0,
-            "extended_breaks": 0,
-            "taken_breaks": 0,
-            "completion_ratio": None,
-            "score": {
-                "score": score_obj.score,
-                "level": score_obj.level,
-                "deficit_minutes": score_obj.deficit_minutes,
-                "status": score_obj.status,
-            },
-            "truncated": truncated,
-        }
+        score_obj = calculate_recovery_score(
+            detection=dummy_detection,
+            workload_level=workload_level,
+        )
+        return dummy_detection, score_obj, truncated
 
-    # 5. Build planned schedule and detect actual recovery
+    # Build planned schedule and detect actual recovery
     strategy_params = StrategyParams(
         work_minutes=strategy_row.work_duration_minutes,
         short_break_minutes=strategy_row.break_duration_minutes,
@@ -435,11 +444,63 @@ def detect_recovery(
     )
     score = calculate_recovery_score(
         detection=detection,
-        workload_level=payload.workload_level,
+        workload_level=workload_level,
     )
+    return detection, score, truncated
+
+
+def detect_recovery(
+    session: Session,
+    user_id: UUID,
+    payload: RecoveryDetectRequest,
+) -> dict:
+    # 1. Lock the user's recovery_strategies row to serialize concurrent detects per user
+    strategy_row = session.scalar(
+        sa.select(RecoveryStrategy)
+        .where(
+            RecoveryStrategy.user_id == user_id,
+            RecoveryStrategy.is_active == True,
+        )
+        .with_for_update()
+    )
+    if strategy_row is None:
+        raise APIError(409, "recovery_strategy_not_configured", "Recovery strategy is not configured")
+
+    result = compute_recovery_for_day(
+        session,
+        user_id,
+        payload.date,
+        payload.timezone,
+        workload_level=payload.workload_level,
+        strategy_row=strategy_row,
+    )
+    assert result is not None
+    detection, score, truncated = result
+
+    # 4. If < 2 sessions: UNKNOWN status, delete nothing, insert nothing
+    if len(detection.breaks) == 0 and detection.data_status == "UNKNOWN":
+        return {
+            "data_status": "UNKNOWN",
+            "breaks": [],
+            "observed_recovery_minutes": 0.0,
+            "planned_recovery_minutes": 0.0,
+            "missed_breaks": 0,
+            "shortened_breaks": 0,
+            "extended_breaks": 0,
+            "taken_breaks": 0,
+            "completion_ratio": None,
+            "score": {
+                "score": score.score,
+                "level": score.level,
+                "deficit_minutes": score.deficit_minutes,
+                "status": score.status,
+            },
+            "truncated": truncated,
+        }
 
     # 6. Persist idempotently inside a savepoint:
     # Delete existing DETECTED periods on that local day for this user, then insert new DETECTED periods
+    day_start_utc, day_end_utc = get_local_day_bounds(payload.date, payload.timezone)
     with session.begin_nested():
         session.execute(
             sa.delete(RecoveryPeriod).where(

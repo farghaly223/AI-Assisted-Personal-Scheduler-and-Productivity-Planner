@@ -62,6 +62,7 @@ class WorkloadSummary:
         load_ratio: (total_task_minutes + fixed_event_minutes) / available_minutes, capped at max_load_ratio.
         level: Categorical workload level 'LOW', 'MEDIUM', 'HIGH', or None if has_data is False.
         has_data: False when tasks and events are both empty, indicating absence of workload tracking.
+        truncated: True when task or event rows exceeded read limits.
     """
 
     total_task_minutes: int
@@ -71,6 +72,7 @@ class WorkloadSummary:
     load_ratio: float | None
     level: str | None
     has_data: bool
+    truncated: bool = False
 
 
 def calculate_workload(
@@ -79,6 +81,8 @@ def calculate_workload(
     day_start: datetime,
     day_end: datetime,
     config: EnergyConfig = DEFAULT_ENERGY_CONFIG,
+    *,
+    truncated: bool = False,
 ) -> WorkloadSummary:
     """Calculate aggregated workload metrics for a local day.
 
@@ -121,6 +125,19 @@ def calculate_workload(
         if ev_end <= ev_start:
             raise ValueError(f"Event end ({ev_end}) must be after start ({ev_start}) at index {idx}")
 
+    # Handle truncation: treat workload as unavailable
+    if truncated or getattr(tasks, "truncated", False) or getattr(events, "truncated", False):
+        return WorkloadSummary(
+            total_task_minutes=0,
+            completed_task_minutes=0,
+            fixed_event_minutes=0,
+            high_priority_tasks=0,
+            load_ratio=None,
+            level=None,
+            has_data=False,
+            truncated=True,
+        )
+
     # Empty inputs represent absence of data, NOT a light day
     if len(tasks) == 0 and len(events) == 0:
         return WorkloadSummary(
@@ -131,6 +148,7 @@ def calculate_workload(
             load_ratio=None,
             level=None,
             has_data=False,
+            truncated=False,
         )
 
     # 1. Process tasks

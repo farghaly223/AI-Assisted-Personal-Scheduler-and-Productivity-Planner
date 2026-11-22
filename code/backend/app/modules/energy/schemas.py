@@ -350,4 +350,83 @@ class RecoverySummaryResponse(Contract):
     periods_count: int
 
 
+# --- Energy Score Schemas ---
+
+class EnergyCalculateRequest(Contract):
+    target_date: dt_date
+    timezone: ZoneName
+
+
+class InsightDetailRead(Contract):
+    code: str
+    message: str
+
+
+class ComponentRead(Contract):
+    name: str
+    score: float
+    weight_used: float
+    contribution: float
+
+
+class EnergyScoreRead(Contract):
+    id: UUID
+    target_date: dt_date
+    status: Literal["ok", "insufficient_data"]
+    energy_score: float | None = None
+    energy_level: Literal["Low", "Medium", "High"] | None = None
+    confidence: float | None = None
+    sleep_duration: float | None = None
+    sleep_quality: int | None = None
+    workload_level: Literal["Low", "Medium", "High"] | None = None
+    recovery_level: Literal["Low", "Medium", "High"] | None = None
+    insights: list[str] = Field(default_factory=list)
+    insight_details: list[InsightDetailRead] = Field(default_factory=list)
+    calculated_at: datetime
+
+
+class EnergyExplanationRead(Contract):
+    id: UUID
+    target_date: dt_date
+    status: Literal["ok", "insufficient_data"]
+    energy_score: float | None = None
+    energy_level: Literal["Low", "Medium", "High"] | None = None
+    confidence: float | None = None
+    sleep_duration: float | None = None
+    sleep_quality: int | None = None
+    workload_level: Literal["Low", "Medium", "High"] | None = None
+    recovery_level: Literal["Low", "Medium", "High"] | None = None
+    insights: list[str] = Field(default_factory=list)
+    insight_details: list[InsightDetailRead] = Field(default_factory=list)
+    components: list[ComponentRead] = Field(default_factory=list)
+    confidence_breakdown: dict = Field(default_factory=dict)
+    calculated_at: datetime
+
+
+class SleepDaySummary(Contract):
+    status: str | None = None
+    duration_minutes: int | None = None
+    quality_rating: int | None = None
+    quality_score: float | None = None
+
+
+class WorkloadDaySummary(Contract):
+    total_task_duration: int
+    completed_task_duration: int | None = None
+    fixed_event_duration: int
+    high_priority_tasks: int
+    level: Literal["Low", "Medium", "High"] | None = None
+    has_data: bool
+
+
+class DailySummaryResponse(Contract):
+    date: dt_date
+    timezone: str
+    energy_score: EnergyScoreRead | None = None
+    sleep: SleepDaySummary | None = None
+    workload: WorkloadDaySummary
+    recovery: RecoverySummaryResponse
+
+
+
 

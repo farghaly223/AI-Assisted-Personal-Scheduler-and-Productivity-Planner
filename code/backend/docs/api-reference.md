@@ -52,6 +52,11 @@ Public endpoints: health, register, verify-otp, resend-otp, login, refresh. All 
 | GET | `/energy/recovery/periods` | `?limit=50&source=DETECTED` | 200 Page of RecoveryPeriodRead |
 | POST | `/energy/recovery/detect` | Detect example below | 200 RecoveryDetectResponse; idempotent recovery breaks detection and score |
 | GET | `/energy/recovery/summary` | `?date=2026-11-22&timezone=UTC` | 200 RecoverySummaryResponse; focus and recovery day summary |
+| POST | `/energy/calculate` | Calculate example below | 200 EnergyScoreRead; calculate and persist daily score |
+| GET | `/energy/current` | Bearer, no body | 200 EnergyScoreRead; 404 if no score stored |
+| GET | `/energy/history` | `?limit=50&offset=0&status=ok` | 200 Page of EnergyScoreRead; newest target_date first |
+| GET | `/energy/daily-summary` | `?date=2026-11-22&timezone=UTC` | 200 DailySummaryResponse; read-only daily summary |
+| GET | `/energy/explanation/{id}` | UUID path, no body | 200 EnergyExplanationRead; 404 if not found or other user |
 
 ## Authentication example
 
@@ -400,6 +405,105 @@ Day summary (`GET /energy/recovery/summary?date=...&timezone=...`):
 - Returns `focus_sessions_completed`, `total_focus_minutes`, `in_progress` boolean, `recovery_minutes_by_source` (always containing all four keys: `FOCUS_TIMER`, `DETECTED`, `MANUAL`, `PLANNED` with 0 defaults), `total_recovery_minutes`, and `periods_count`.
 - Local day boundaries are computed DST-safely using `app.core.timezones`.
 
+## Energy score examples and validation
+
+Energy calculation (`POST /energy/calculate`):
+
+Request:
+```json
+{"target_date":"2026-11-22","timezone":"Africa/Cairo"}
+```
+
+Response (`EnergyScoreRead`):
+```json
+{
+  "id": "00000000-0000-4000-8000-000000000001",
+  "target_date": "2026-11-22",
+  "status": "ok",
+  "energy_score": 85.0,
+  "energy_level": "High",
+  "confidence": 0.85,
+  "sleep_duration": 8.0,
+  "sleep_quality": 4,
+  "workload_level": "Medium",
+  "recovery_level": "High",
+  "insights": [
+    "High workload detected"
+  ],
+  "insight_details": [
+    {"code": "HIGH_WORKLOAD", "message": "High workload detected"}
+  ],
+  "calculated_at": "2026-11-22T10:00:00Z"
+}
+```
+
+When `status == "insufficient_data"` (e.g. no sleep session, unconfirmed sleep session, or missing required factor), `energy_score`, `energy_level`, and `confidence` are returned as `null` across all API responses:
+```json
+{
+  "id": "00000000-0000-4000-8000-000000000001",
+  "target_date": "2026-11-22",
+  "status": "insufficient_data",
+  "energy_score": null,
+  "energy_level": null,
+  "confidence": null,
+  "sleep_duration": null,
+  "sleep_quality": null,
+  "workload_level": null,
+  "recovery_level": null,
+  "insights": [
+    "Insufficient data to compute overall energy score",
+    "No sleep data available for this date"
+  ],
+  "insight_details": [
+    {"code": "INSUFFICIENT_DATA", "message": "Insufficient data to compute overall energy score"},
+    {"code": "SLEEP_NO_DATA", "message": "No sleep data available for this date"}
+  ],
+  "calculated_at": "2026-11-22T10:00:00Z"
+}
+```
+
+Explanation endpoint (`GET /energy/explanation/{id}`):
+```json
+{
+  "id": "00000000-0000-4000-8000-000000000001",
+  "target_date": "2026-11-22",
+  "status": "ok",
+  "energy_score": 85.0,
+  "energy_level": "High",
+  "confidence": 0.85,
+  "sleep_duration": 8.0,
+  "sleep_quality": 4,
+  "workload_level": "Medium",
+  "recovery_level": "High",
+  "insights": ["High workload detected"],
+  "insight_details": [{"code": "HIGH_WORKLOAD", "message": "High workload detected"}],
+  "components": [
+    {"name": "sleep", "score": 85.0, "weight_used": 0.5, "contribution": 42.5},
+    {"name": "workload", "score": 75.0, "weight_used": 0.25, "contribution": 18.75},
+    {"name": "recovery", "score": 95.0, "weight_used": 0.25, "contribution": 23.75}
+  ],
+  "confidence_breakdown": {
+    "overall_confidence": 0.85,
+    "status": "ok"
+  },
+  "calculated_at": "2026-11-22T10:00:00Z"
+}
+```
+
+Daily summary (`GET /energy/daily-summary?date=2026-11-22&timezone=Africa/Cairo`):
+Read-only aggregation returning the stored energy score (or null), sleep summary (status, duration, rating, score), live workload metrics, and recovery summary.
+
+Architecture and Scheduler Coupling:
+- Scheduler coupling is isolated strictly to `app/modules/energy/services/scheduler_adapter.py`.
+- It executes only SELECT queries with verified owner filtering on `tasks` and `events`. Titles, locations, and personal text are never read into energy objects.
+- FIXED tasks count `min(estimated_duration_minutes, minutes of overlap with local day)`.
+- FLEXIBLE tasks count only when their deadline falls within the local day window.
+- Known limitation: A FIXED task and a calendar event covering the same interval can both be counted in total cognitive demand.
+- WEEKLY events are prefiltered in SQL using recurrence columns and expanded deterministically in the event's timezone with `fold=0` (nonexistent times shift forward; ambiguous times choose first occurrence).
+- Row reading is capped (limit+1). If tasks or events exceed limit, the workload factor is treated as unavailable with insight `WORKLOAD_TRUNCATED`.
+- Upsert into `energy_scores` is idempotent on `(user_id, target_date)` (`DO UPDATE`).
+
+
 ## Pagination and errors
 
 ```json
@@ -425,6 +529,10 @@ curl.exe -X POST http://127.0.0.1:8000/api/v1/tasks -H 'Authorization: Bearer RE
 curl.exe 'http://127.0.0.1:8000/api/v1/events?recurrence_type=WEEKLY&limit=50' -H 'Authorization: Bearer REPLACE_ACCESS_TOKEN'
 curl.exe -X PUT http://127.0.0.1:8000/api/v1/energy/sleep-schedule -H 'Authorization: Bearer REPLACE_ACCESS_TOKEN' -H 'Content-Type: application/json' --data-binary '@sleep_schedule.json'
 curl.exe http://127.0.0.1:8000/api/v1/energy/sleep-schedule -H 'Authorization: Bearer REPLACE_ACCESS_TOKEN'
+curl.exe -X POST http://127.0.0.1:8000/api/v1/energy/calculate -H 'Authorization: Bearer REPLACE_ACCESS_TOKEN' -H 'Content-Type: application/json' -d '{"target_date":"2026-11-22","timezone":"Africa/Cairo"}'
+curl.exe http://127.0.0.1:8000/api/v1/energy/current -H 'Authorization: Bearer REPLACE_ACCESS_TOKEN'
+curl.exe 'http://127.0.0.1:8000/api/v1/energy/daily-summary?date=2026-11-22&timezone=Africa/Cairo' -H 'Authorization: Bearer REPLACE_ACCESS_TOKEN'
+curl.exe 'http://127.0.0.1:8000/api/v1/energy/history?limit=10' -H 'Authorization: Bearer REPLACE_ACCESS_TOKEN'
 ```
 
 Store example request JSON in temporary local files, keep real passwords/tokens out of source control, and use Swagger's Authorize button for interactive tests. The backend APIs are ready for teammate integration; no client-side implementation is supplied.

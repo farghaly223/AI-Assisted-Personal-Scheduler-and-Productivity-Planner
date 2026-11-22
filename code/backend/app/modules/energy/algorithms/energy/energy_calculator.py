@@ -211,6 +211,7 @@ def calculate_energy(
         workload is not None
         and workload.has_data is True
         and workload.load_ratio is not None
+        and not getattr(workload, "truncated", False)
     )
     workload_factor_score: Decimal | None = None
     workload_level: str | None = None
@@ -386,14 +387,22 @@ def calculate_energy(
                 message="High workload detected",
             )
         )
-    # 9. WORKLOAD_NO_DATA
+    # 9. WORKLOAD_NO_DATA / WORKLOAD_TRUNCATED
     if not workload_available:
-        insights_list.append(
-            Insight(
-                code="WORKLOAD_NO_DATA",
-                message="No workload data available for this date",
+        if getattr(workload, "truncated", False):
+            insights_list.append(
+                Insight(
+                    code="WORKLOAD_TRUNCATED",
+                    message="Workload tasks or events exceeded limit and could not be analyzed",
+                )
             )
-        )
+        else:
+            insights_list.append(
+                Insight(
+                    code="WORKLOAD_NO_DATA",
+                    message="No workload data available for this date",
+                )
+            )
 
     # 10. RECOVERY_INSUFFICIENT
     if recovery_available and recovery is not None:
