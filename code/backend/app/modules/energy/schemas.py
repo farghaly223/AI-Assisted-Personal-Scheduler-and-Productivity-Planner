@@ -7,6 +7,7 @@ from uuid import UUID
 from pydantic import AfterValidator, Field, field_validator, model_validator
 
 from app.core.schemas import Contract, WallTime, ZoneName
+from app.modules.energy.algorithms.recovery.recovery_planner import StrategyParams
 from app.modules.energy.algorithms.sleep.sleep_detector import calculate_duration_minutes
 
 DayInt = Annotated[int, Field(strict=True, ge=0, le=6)]
@@ -179,6 +180,174 @@ class SleepEstimateResponse(Contract):
     status: Literal["estimated", "existing", "insufficient_data"]
     created: bool
     session: SleepSessionRead | None = None
+
+
+# --- Recovery Schemas ---
+
+StrategyType = Literal["POMODORO", "CUSTOM"]
+
+
+class RecoveryStrategyCreateOrUpdate(Contract):
+    strategy_type: StrategyType = "POMODORO"
+    work_duration_minutes: int | None = Field(default=None, strict=True)
+    break_duration_minutes: int | None = Field(default=None, strict=True)
+    long_break_duration_minutes: int | None = Field(default=None, strict=True)
+    long_break_after_sessions: int | None = Field(default=None, strict=True)
+    is_active: bool = Field(default=True, strict=True)
+
+    @model_validator(mode="after")
+    def validate_strategy(self):
+        if self.strategy_type == "POMODORO":
+            defaults = (25, 5, 20, 4)
+            provided = (
+                self.work_duration_minutes,
+                self.break_duration_minutes,
+                self.long_break_duration_minutes,
+                self.long_break_after_sessions,
+            )
+            for val, dflt, name in zip(provided, defaults, (
+                "work_duration_minutes",
+                "break_duration_minutes",
+                "long_break_duration_minutes",
+                "long_break_after_sessions",
+            )):
+                if val is not None and val != dflt:
+                    raise ValueError(f"POMODORO strategy {name} must be {dflt} if provided, got {val}")
+            self.work_duration_minutes = 25
+            self.break_duration_minutes = 5
+            self.long_break_duration_minutes = 20
+            self.long_break_after_sessions = 4
+        elif self.strategy_type == "CUSTOM":
+            if self.work_duration_minutes is None:
+                raise ValueError("work_duration_minutes is required for CUSTOM strategy")
+            if self.break_duration_minutes is None:
+                raise ValueError("break_duration_minutes is required for CUSTOM strategy")
+            if self.long_break_duration_minutes is None:
+                raise ValueError("long_break_duration_minutes is required for CUSTOM strategy")
+            if self.long_break_after_sessions is None:
+                raise ValueError("long_break_after_sessions is required for CUSTOM strategy")
+
+        if not (1 <= self.work_duration_minutes <= 240):
+            raise ValueError("work_duration_minutes must be between 1 and 240")
+        if not (1 <= self.break_duration_minutes <= 120):
+            raise ValueError("break_duration_minutes must be between 1 and 120")
+        if not (1 <= self.long_break_duration_minutes <= 240):
+            raise ValueError("long_break_duration_minutes must be between 1 and 240")
+        if not (1 <= self.long_break_after_sessions <= 12):
+            raise ValueError("long_break_after_sessions must be between 1 and 12")
+
+        try:
+            StrategyParams(
+                work_minutes=self.work_duration_minutes,
+                short_break_minutes=self.break_duration_minutes,
+                long_break_minutes=self.long_break_duration_minutes,
+                long_break_after_sessions=self.long_break_after_sessions,
+            )
+        except Exception as e:
+            raise ValueError(str(e)) from e
+
+        return self
+
+
+class RecoveryStrategyRead(Contract):
+    id: UUID
+    strategy_type: str
+    work_duration_minutes: int
+    break_duration_minutes: int
+    long_break_duration_minutes: int
+    long_break_after_sessions: int
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class FocusSessionStartRequest(Contract):
+    started_at: Instant | None = None
+
+
+FocusSessionStatus = Literal["IN_PROGRESS", "COMPLETED", "CANCELLED", "ABANDONED"]
+FinishStatus = Literal["COMPLETED", "CANCELLED", "ABANDONED"]
+
+
+class FocusSessionFinishRequest(Contract):
+    status: FinishStatus
+    ended_at: Instant | None = None
+
+
+class FocusSessionRead(Contract):
+    id: UUID
+    start_time: datetime
+    end_time: datetime | None = None
+    duration_minutes: int | None = None
+    status: FocusSessionStatus
+    created_at: datetime
+    updated_at: datetime
+
+
+RecoveryPeriodSource = Literal["FOCUS_TIMER", "DETECTED", "MANUAL", "PLANNED"]
+RecoveryPeriodType = Literal["SHORT_BREAK", "LONG_BREAK", "CUSTOM_BREAK", "REST"]
+
+
+class RecoveryPeriodRead(Contract):
+    id: UUID
+    start_time: datetime
+    end_time: datetime
+    duration_minutes: int
+    source: RecoveryPeriodSource
+    recovery_type: RecoveryPeriodType
+    created_at: datetime
+    updated_at: datetime
+
+
+class RecoveryDetectRequest(Contract):
+    date: dt_date
+    timezone: ZoneName
+    workload_level: Literal["LOW", "MEDIUM", "HIGH"] | None = None
+
+
+class ObservedBreakRead(Contract):
+    index: int
+    block_break_index: int
+    start: datetime
+    end: datetime
+    raw_gap_minutes: float
+    credited_recovery_minutes: float
+    capped_recovery_minutes: float
+    planned_duration_minutes: int
+    classification: Literal["MISSED", "SHORTENED", "TAKEN", "EXTENDED"]
+    planned_break_kind: Literal["SHORT_BREAK", "LONG_BREAK"]
+
+
+class RecoveryScoreRead(Contract):
+    score: float | None = None
+    level: Literal["LOW", "MEDIUM", "HIGH"] | None = None
+    deficit_minutes: int | None = None
+    status: Literal["ok", "insufficient_data"]
+
+
+class RecoveryDetectResponse(Contract):
+    data_status: Literal["UNKNOWN", "PARTIAL", "OBSERVED"]
+    breaks: list[ObservedBreakRead]
+    observed_recovery_minutes: float
+    planned_recovery_minutes: float
+    missed_breaks: int
+    shortened_breaks: int
+    extended_breaks: int
+    taken_breaks: int
+    completion_ratio: float | None = None
+    score: RecoveryScoreRead
+    truncated: bool
+
+
+class RecoverySummaryResponse(Contract):
+    date: dt_date
+    timezone: str
+    focus_sessions_completed: int
+    total_focus_minutes: int
+    in_progress: bool
+    recovery_minutes_by_source: dict[str, int]
+    total_recovery_minutes: int
+    periods_count: int
 
 
 

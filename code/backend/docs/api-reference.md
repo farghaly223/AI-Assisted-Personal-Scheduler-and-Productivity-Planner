@@ -44,6 +44,14 @@ Public endpoints: health, register, verify-otp, resend-otp, login, refresh. All 
 | GET | `/energy/sleep/quality/history` | `?limit=50&date_from=2026-11-01` | 200 Page of SleepQualityHistoryItem |
 | POST | `/energy/sleep/signals/sync` | Signals sync example below | 200 SignalSyncResponse; idempotent screen usage signals ingestion |
 | POST | `/energy/sleep/estimate` | Estimate example below | 201/200 SleepEstimateResponse; deterministic candidate estimation |
+| PUT | `/energy/recovery/strategy` | Strategy PUT example below | 200 RecoveryStrategyRead; creates or replaces strategy, re-enables is_active |
+| GET | `/energy/recovery/strategy` | Bearer, no body | 200 RecoveryStrategyRead; 404 if no strategy configured |
+| POST | `/energy/recovery/sessions/start` | Optional `{"started_at":"..."}` | 201 FocusSessionRead; starts session IN_PROGRESS |
+| POST | `/energy/recovery/sessions/{id}/finish` | `{"status":"COMPLETED"}` | 200 FocusSessionRead; CAS update to finish session |
+| GET | `/energy/recovery/sessions` | `?limit=50&status=COMPLETED` | 200 Page of FocusSessionRead |
+| GET | `/energy/recovery/periods` | `?limit=50&source=DETECTED` | 200 Page of RecoveryPeriodRead |
+| POST | `/energy/recovery/detect` | Detect example below | 200 RecoveryDetectResponse; idempotent recovery breaks detection and score |
+| GET | `/energy/recovery/summary` | `?date=2026-11-22&timezone=UTC` | 200 RecoverySummaryResponse; focus and recovery day summary |
 
 ## Authentication example
 
@@ -303,6 +311,94 @@ Validation and rules for estimation:
 - When a candidate is detected, creates a `SleepSession` (`source='android_usage'`, `status='pending_confirmation'`, `confidence=candidate.confidence_score`, `duration_minutes=candidate.duration_minutes`) and returns 201 with `status="estimated"`, `created=true`.
 - Linking signals: updates rows in the search window where `session_id IS NULL` OR where the linked session has `status='rejected'` using a window predicate UPDATE (`user_id` and search window range). Signals linked to another non-rejected session are never stolen.
 - If a rejected session is re-estimated, the rejected session freed the date and its signals are re-linked to the new estimated session.
+
+## Recovery endpoints examples and validation
+
+Strategy PUT (`PUT /energy/recovery/strategy`):
+
+```json
+{"strategy_type":"POMODORO"}
+```
+
+Or custom strategy:
+
+```json
+{"strategy_type":"CUSTOM","work_duration_minutes":50,"break_duration_minutes":10,"long_break_duration_minutes":30,"long_break_after_sessions":3}
+```
+
+Response (`RecoveryStrategyRead`):
+
+```json
+{
+  "id":"00000000-0000-4000-8000-000000000001",
+  "strategy_type":"POMODORO",
+  "work_duration_minutes":25,
+  "break_duration_minutes":5,
+  "long_break_duration_minutes":20,
+  "long_break_after_sessions":4,
+  "is_active":true,
+  "created_at":"2026-11-22T10:00:00Z",
+  "updated_at":"2026-11-22T10:00:00Z"
+}
+```
+
+Rules and notes:
+- `PUT /energy/recovery/strategy` creates or updates the caller's strategy row (safe under concurrency with `ON CONFLICT (user_id)`). PUT always re-enables `is_active=true`.
+- An inactive strategy returns the same 409 `recovery_strategy_not_configured` as a missing strategy on `/detect`.
+- For `POMODORO`: omitted duration values default to 25/5/20/4. Any other provided values are rejected with 422.
+- For `CUSTOM`: all four duration fields are required. Strict integers: work 1–240, break 1–120, long break 1–240, long_break_after_sessions 1–12.
+- Extra fields and user_id in the body are forbidden (422).
+
+Focus session lifecycle:
+- `POST /energy/recovery/sessions/start`: creates session with `status="IN_PROGRESS"`. Optional client `started_at` accepted only if timezone-aware, not > 5m in future and not older than 24 hours. Returns 409 if a session is already IN_PROGRESS (enforced via database partial unique index `uq_focus_sessions_user_in_progress`).
+- `POST /energy/recovery/sessions/{id}/finish`: body `{"status":"COMPLETED|CANCELLED|ABANDONED","ended_at":optional}`. Atomic compare-and-set ensures only IN_PROGRESS sessions can be finished (409 if already finished, 404 for missing/other user). `ended_at` must be > start_time, not in future beyond 5 minutes, and session may not exceed 24 hours (422). Sets `duration_minutes` with `Decimal` `ROUND_HALF_UP` from integer microseconds.
+
+Recovery detection (`POST /energy/recovery/detect`):
+
+Request:
+```json
+{"date":"2026-11-22","timezone":"Africa/Cairo","workload_level":"MEDIUM"}
+```
+
+Response (`RecoveryDetectResponse`):
+```json
+{
+  "data_status":"OBSERVED",
+  "breaks":[
+    {
+      "index":1,
+      "block_break_index":1,
+      "start":"2026-11-22T08:25:00Z",
+      "end":"2026-11-22T08:30:00Z",
+      "raw_gap_minutes":5.0,
+      "credited_recovery_minutes":5.0,
+      "capped_recovery_minutes":5.0,
+      "planned_duration_minutes":5,
+      "classification":"TAKEN",
+      "planned_break_kind":"SHORT_BREAK"
+    }
+  ],
+  "observed_recovery_minutes":5.0,
+  "planned_recovery_minutes":5.0,
+  "missed_breaks":0,
+  "shortened_breaks":0,
+  "extended_breaks":0,
+  "taken_breaks":1,
+  "completion_ratio":1.0,
+  "score":{"score":100.0,"level":"HIGH","deficit_minutes":0,"status":"ok"},
+  "truncated":false
+}
+```
+
+Detection rules:
+- Concurrent detect requests are serialized per user using `SELECT ... FOR UPDATE` on the user's `recovery_strategies` row.
+- Idempotently deletes caller's existing `source='DETECTED'` recovery periods in the local day window and inserts one period per observed break with credited recovery > 0 (MISSED breaks create no row; MANUAL, PLANNED, and FOCUS_TIMER rows are untouched).
+- When fewer than 2 completed focus sessions exist, returns `data_status='UNKNOWN'`, score with `status='insufficient_data'`, and writes/deletes nothing.
+- *Limitation*: `fixed_events` and `app_activity` are passed as empty/None for now; scheduler integration comes with the workload service in the Energy Score phase.
+
+Day summary (`GET /energy/recovery/summary?date=...&timezone=...`):
+- Returns `focus_sessions_completed`, `total_focus_minutes`, `in_progress` boolean, `recovery_minutes_by_source` (always containing all four keys: `FOCUS_TIMER`, `DETECTED`, `MANUAL`, `PLANNED` with 0 defaults), `total_recovery_minutes`, and `periods_count`.
+- Local day boundaries are computed DST-safely using `app.core.timezones`.
 
 ## Pagination and errors
 

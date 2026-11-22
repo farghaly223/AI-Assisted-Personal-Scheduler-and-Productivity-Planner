@@ -37,6 +37,7 @@ class ObservedBreak:
     capped_recovery_minutes: float
     planned_duration_minutes: int
     classification: str
+    planned_break_kind: str = "SHORT_BREAK"
 
 
 @dataclass(frozen=True)
@@ -244,9 +245,12 @@ def detect_actual_recovery(
 
         # Determine target planned break
         if block_break_index <= len(planned_breaks):
-            target_planned_minutes = planned_breaks[block_break_index - 1].duration_minutes
+            target_planned_block = planned_breaks[block_break_index - 1]
+            target_planned_minutes = target_planned_block.duration_minutes
+            target_planned_kind = target_planned_block.kind
         else:
             target_planned_minutes = planned.strategy.short_break_minutes
+            target_planned_kind = "SHORT_BREAK"
 
         # Clip busy intervals to gap and union them
         clipped_busy: list[tuple[datetime, datetime]] = []
@@ -308,6 +312,7 @@ def detect_actual_recovery(
                 capped_recovery_minutes=capped_minutes,
                 planned_duration_minutes=target_planned_minutes,
                 classification=classification,
+                planned_break_kind=target_planned_kind,
             )
         )
 
