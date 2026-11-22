@@ -1,6 +1,6 @@
 """Energy module API contracts and validation schemas."""
 
-from datetime import date, datetime, time, timezone
+from datetime import date as dt_date, datetime, time, timezone
 from typing import Annotated, Generic, Literal, TypeVar
 from uuid import UUID
 
@@ -109,7 +109,7 @@ class SleepSessionRead(Contract):
     end_time: datetime
     duration_minutes: int
     timezone: str
-    sleep_date: date
+    sleep_date: dt_date
     source: str
     confidence: float
     status: str
@@ -140,7 +140,45 @@ class SleepQualityRead(Contract):
 
 class SleepQualityHistoryItem(Contract):
     session_id: UUID
-    sleep_date: date
+    sleep_date: dt_date
     rating: int
     quality_score: float
+
+
+EventType = Literal[
+    "SCREEN_INTERACTIVE",
+    "SCREEN_NON_INTERACTIVE",
+    "KEYGUARD_SHOWN",
+    "KEYGUARD_HIDDEN",
+]
+
+
+class ScreenEvent(Contract):
+    event_type: EventType
+    timestamp: Instant
+
+
+class SignalSyncRequest(Contract):
+    timezone: ZoneName
+    screen_events: list[ScreenEvent] = Field(min_length=1, max_length=5000)
+    date: dt_date | None = None
+
+
+class SignalSyncResponse(Contract):
+    received: int
+    inserted: int
+    duplicates: int
+
+
+class SleepEstimateRequest(Contract):
+    target_date: dt_date
+    timezone: ZoneName
+
+
+class SleepEstimateResponse(Contract):
+    status: Literal["estimated", "existing", "insufficient_data"]
+    created: bool
+    session: SleepSessionRead | None = None
+
+
 

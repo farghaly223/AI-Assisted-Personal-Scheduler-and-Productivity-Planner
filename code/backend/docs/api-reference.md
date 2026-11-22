@@ -42,6 +42,8 @@ Public endpoints: health, register, verify-otp, resend-otp, login, refresh. All 
 | POST | `/energy/sleep/sessions/{id}/quality` | `{"rating":4}` | 201 SleepQualityRead |
 | PATCH | `/energy/sleep/sessions/{id}/quality` | `{"rating":5}` | 200 updated SleepQualityRead |
 | GET | `/energy/sleep/quality/history` | `?limit=50&date_from=2026-11-01` | 200 Page of SleepQualityHistoryItem |
+| POST | `/energy/sleep/signals/sync` | Signals sync example below | 200 SignalSyncResponse; idempotent screen usage signals ingestion |
+| POST | `/energy/sleep/estimate` | Estimate example below | 201/200 SleepEstimateResponse; deterministic candidate estimation |
 
 ## Authentication example
 
@@ -231,6 +233,76 @@ Validation and rules for quality:
 - Quality score is normalized to {0.0, 25.0, 50.0, 75.0, 100.0} via `normalize_sleep_quality`.
 - The database `notes` column is not exposed in any API contract.
 - Quality history (`GET /energy/sleep/quality/history`) returns a paginated list (`Page[SleepQualityHistoryItem]`), newest first, with optional `date_from` and `date_to` bounds.
+- Hard delete (`DELETE /energy/sleep/sessions/{id}`) cascades in PostgreSQL to automatically delete both child quality ratings and any linked usage signals (`fk_sleep_usage_signals_session ON DELETE CASCADE`).
+
+## Sleep signals sync and estimation examples and validation
+
+Signals sync request (`POST /energy/sleep/signals/sync`):
+
+```json
+{
+  "timezone": "Africa/Cairo",
+  "screen_events": [
+    {"event_type": "SCREEN_NON_INTERACTIVE", "timestamp": "2026-11-20T21:30:00Z"},
+    {"event_type": "SCREEN_INTERACTIVE", "timestamp": "2026-11-21T05:30:00Z"}
+  ],
+  "date": "2026-11-21"
+}
+```
+
+SignalSyncResponse:
+
+```json
+{"received": 2, "inserted": 2, "duplicates": 0}
+```
+
+Validation and rules for signals sync:
+- `event_type` is restricted to the privacy whitelist: `SCREEN_INTERACTIVE`, `SCREEN_NON_INTERACTIVE`, `KEYGUARD_SHOWN`, `KEYGUARD_HIDDEN`. All other values or application identifiers are rejected with 422.
+- `screen_events` must contain between 1 and 5000 items. Empty lists or >5000 items are rejected with 422.
+- `timestamp` must be timezone-aware. Timestamps in the future (>5 minutes clock skew) or older than 30 days are rejected with 422.
+- Payload events are deduplicated after converting timestamps to UTC so identical instants with different timezone offsets are treated as duplicates.
+- Signals are inserted in a single bulk operation with `ON CONFLICT (user_id, event_type, event_timestamp) DO NOTHING`. Signals are stored with `session_id=null`.
+
+Sleep estimate request (`POST /energy/sleep/estimate`):
+
+```json
+{
+  "target_date": "2026-11-21",
+  "timezone": "Africa/Cairo"
+}
+```
+
+SleepEstimateResponse (created candidate):
+
+```json
+{
+  "status": "estimated",
+  "created": true,
+  "session": {
+    "id": "00000000-0000-4000-8000-000000000001",
+    "start_time": "2026-11-20T21:30:00Z",
+    "end_time": "2026-11-21T05:30:00Z",
+    "duration_minutes": 480,
+    "timezone": "Africa/Cairo",
+    "sleep_date": "2026-11-21",
+    "source": "android_usage",
+    "confidence": 0.75,
+    "status": "pending_confirmation",
+    "created_at": "2026-11-21T06:00:00Z",
+    "updated_at": "2026-11-21T06:00:00Z",
+    "quality_rating": null,
+    "quality_score": null
+  }
+}
+```
+
+Validation and rules for estimation:
+- `target_date` is the user's local wake-up date. Rejected with 422 if > user's local today + 1 day or older than 30 days.
+- If a non-rejected session already exists for `target_date`, returns 200 with `status="existing"`, `created=false`, and the existing `session`.
+- If device evidence is insufficient for candidate detection, returns 200 with `status="insufficient_data"`, `created=false`, and `session=null`.
+- When a candidate is detected, creates a `SleepSession` (`source='android_usage'`, `status='pending_confirmation'`, `confidence=candidate.confidence_score`, `duration_minutes=candidate.duration_minutes`) and returns 201 with `status="estimated"`, `created=true`.
+- Linking signals: updates rows in the search window where `session_id IS NULL` OR where the linked session has `status='rejected'` using a window predicate UPDATE (`user_id` and search window range). Signals linked to another non-rejected session are never stolen.
+- If a rejected session is re-estimated, the rejected session freed the date and its signals are re-linked to the new estimated session.
 
 ## Pagination and errors
 

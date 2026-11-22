@@ -10,6 +10,10 @@ from app.core.dependencies import SessionDep
 from app.core.errors import ERROR_RESPONSES
 from app.modules.energy.schemas import (
     Page,
+    SignalSyncRequest,
+    SignalSyncResponse,
+    SleepEstimateRequest,
+    SleepEstimateResponse,
     SleepQualityCreate,
     SleepQualityHistoryItem,
     SleepQualityRead,
@@ -19,8 +23,10 @@ from app.modules.energy.schemas import (
     SleepSessionRead,
 )
 from app.modules.energy.services import sleep_sessions as service
+from app.modules.energy.services import sleep_signals as signals_service
 
 router = APIRouter(prefix="/sleep", tags=["Energy - Sleep"], responses=ERROR_RESPONSES)
+
 
 
 @router.post(
@@ -164,3 +170,29 @@ def list_quality_history(
         offset=data["offset"],
         has_more=data["has_more"],
     )
+
+
+@router.post(
+    "/signals/sync",
+    response_model=SignalSyncResponse,
+    status_code=200,
+    summary="Sync screen usage signals",
+    description="Ingest batch of screen usage events. Idempotent on (user_id, event_type, event_timestamp). Max 5000 events.",
+)
+def sync_sleep_signals(payload: SignalSyncRequest, session: SessionDep):
+    user_id = session.info["user_id"]
+    return SignalSyncResponse.model_validate(signals_service.sync_screen_signals(session, user_id, payload))
+
+
+@router.post(
+    "/estimate",
+    response_model=SleepEstimateResponse,
+    summary="Estimate sleep candidate for local date",
+    description="Estimate sleep candidate from device signals for user's local wake-up date. Returns 201 if estimated, 200 if existing or insufficient data.",
+)
+def estimate_sleep(payload: SleepEstimateRequest, session: SessionDep, response: Response):
+    user_id = session.info["user_id"]
+    status_code, data = signals_service.estimate_sleep_session(session, user_id, payload)
+    response.status_code = status_code
+    return SleepEstimateResponse.model_validate(data)
+
