@@ -9,6 +9,7 @@ from decimal import Decimal
 import pytest
 
 from app.modules.energy.algorithms.energy import (
+    ALGORITHM_VERSION,
     DEFAULT_ENERGY_CONFIG,
     Component,
     EnergyConfig,
@@ -210,8 +211,59 @@ def test_sleep_unconfirmed_treated_as_missing():
     assert any(i.code == "SLEEP_UNCONFIRMED" for i in res.insights)
 
 
+def test_workload_available_minutes_override_and_validation():
+    """calculate_workload accepts optional available_minutes (1..1440, strict int) and extra_high_priority_tasks."""
+    day_start = datetime(2026, 5, 1, 0, 0, tzinfo=timezone.utc)
+    day_end = datetime(2026, 5, 2, 0, 0, tzinfo=timezone.utc)
+
+    # 300m over 600 available_minutes -> ratio 0.50 -> MEDIUM
+    s_override = calculate_workload(
+        [TaskLoad(300, 3)],
+        [],
+        day_start,
+        day_end,
+        available_minutes=600,
+    )
+    assert s_override.load_ratio == 0.5
+    assert s_override.level == "MEDIUM"
+
+    # Invalid available_minutes rejected
+    for bad_avail in (0, -10, 1441, True, False, 960.5, "960"):
+        with pytest.raises(ValueError, match="available_minutes"):
+            calculate_workload([], [], day_start, day_end, available_minutes=bad_avail)  # type: ignore[arg-type]
+
+    # Invalid extra_high_priority_tasks rejected
+    for bad_extra in (-1, True, "1"):
+        with pytest.raises(ValueError, match="extra_high_priority_tasks"):
+            calculate_workload([], [], day_start, day_end, extra_high_priority_tasks=bad_extra)  # type: ignore[arg-type]
+
+
+def test_workload_fixed_intervals_and_extra_high_priority_only():
+    """FIXED task intervals alone or extra_high_priority_tasks alone still mark has_data=True."""
+    day_start = datetime(2026, 5, 1, 0, 0, tzinfo=timezone.utc)
+    day_end = datetime(2026, 5, 2, 0, 0, tzinfo=timezone.utc)
+
+    fixed_interval = (
+        datetime(2026, 5, 1, 9, 0, tzinfo=timezone.utc),
+        datetime(2026, 5, 1, 11, 0, tzinfo=timezone.utc),
+    )
+    summary = calculate_workload(
+        [],
+        [fixed_interval],
+        day_start,
+        day_end,
+        extra_high_priority_tasks=1,
+    )
+    assert summary.has_data is True
+    assert summary.total_task_minutes == 0
+    assert summary.fixed_event_minutes == 120
+    assert summary.high_priority_tasks == 1
+
+
 def test_sleep_piecewise_curve_boundaries():
-    """Verify piecewise linear duration scoring at exact points: 180, 300, 420, 540, 690, 840, 900."""
+    """Verify piecewise linear duration scoring at exact points: <=180, 300, 420, 540, 600, 660, 840, 900."""
+    assert ALGORITHM_VERSION == "energy-algo-2"
+
     # Under hard_min (180): 0.0
     r179 = calculate_energy(SleepInput(179, confirmed=True), None, None)
     assert r179.score == 0.0
@@ -232,17 +284,19 @@ def test_sleep_piecewise_curve_boundaries():
     r540 = calculate_energy(SleepInput(540, confirmed=True), None, None)
     assert r540.score == 100.0
 
-    # Midpoint above optimal: 690 min: 100 - (100 - 50) * (690 - 540) / (840 - 540) = 100 - 50 * 150 / 300 = 75.0
-    r690 = calculate_energy(SleepInput(690, confirmed=True), None, None)
-    assert r690.score == 75.0
+    # Midpoint above optimal: 600 min: 100 - (100 - 85) * (600 - 540) / (660 - 540) = 100 - 15 * 60 / 120 = 92.5
+    r600 = calculate_energy(SleepInput(600, confirmed=True), None, None)
+    assert r600.score == 92.5
 
-    # Hard max (840): floor 50.0
+    # Long-sleep floor boundary (660): floor 85.0
+    r660 = calculate_energy(SleepInput(660, confirmed=True), None, None)
+    assert r660.score == 85.0
+
+    # Beyond 660 (840, 900): flat 85.0 floor
     r840 = calculate_energy(SleepInput(840, confirmed=True), None, None)
-    assert r840.score == 50.0
-
-    # Beyond hard max (900): still 50.0 floor
+    assert r840.score == 85.0
     r900 = calculate_energy(SleepInput(900, confirmed=True), None, None)
-    assert r900.score == 50.0
+    assert r900.score == 85.0
 
 
 def test_sleep_quality_blending():
@@ -533,7 +587,10 @@ def test_insights_all_codes_and_order():
     res = calculate_energy(sleep, workload, recovery)
     codes = [i.code for i in res.insights]
 
-    # Verify exact required text in design doc:
+    # Verify exact required text:
+    sleep_short_insight = next(i for i in res.insights if i.code == "SLEEP_SHORT")
+    assert sleep_short_insight.message == "Sleep duration is below 7 hours"
+
     high_wl_insight = next(i for i in res.insights if i.code == "HIGH_WORKLOAD")
     assert high_wl_insight.message == "High workload detected"
 
@@ -549,6 +606,8 @@ def test_insights_sleep_long_and_unrated():
     res = calculate_energy(sleep, None, None)
     codes = [i.code for i in res.insights]
     assert "SLEEP_LONG" in codes
+    sleep_long_insight = next(i for i in res.insights if i.code == "SLEEP_LONG")
+    assert sleep_long_insight.message == "Sleep duration is above 9 hours"
     assert "SLEEP_QUALITY_NOT_RATED" in codes
     assert "WORKLOAD_NO_DATA" in codes
     assert "RECOVERY_NO_DATA" in codes

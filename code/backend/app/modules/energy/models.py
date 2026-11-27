@@ -454,3 +454,97 @@ class EnergyScore(Base):
         server_default=sa.text("now()"),
         server_onupdate=sa.FetchedValue(),
     )
+
+
+class EnergyScoreRevision(Base):
+    __tablename__ = "energy_score_revisions"
+    __table_args__ = (
+        sa.PrimaryKeyConstraint("id", name="pk_energy_score_revisions"),
+        sa.CheckConstraint(
+            "status IN ('ok', 'insufficient_data')",
+            name="ck_energy_score_revisions_status",
+        ),
+        sa.CheckConstraint(
+            "((status = 'ok' AND score IS NOT NULL AND energy_level IS NOT NULL AND confidence IS NOT NULL) OR "
+            "(status = 'insufficient_data' AND score IS NULL AND energy_level IS NULL AND confidence IS NULL))",
+            name="ck_energy_score_revisions_status_score_level",
+        ),
+        sa.CheckConstraint(
+            "score IS NULL OR (score >= 0.0 AND score <= 100.0)",
+            name="ck_energy_score_revisions_score_range",
+        ),
+        sa.CheckConstraint(
+            "energy_level IS NULL OR energy_level IN ('LOW', 'MEDIUM', 'HIGH')",
+            name="ck_energy_score_revisions_level",
+        ),
+        sa.CheckConstraint(
+            "confidence IS NULL OR (confidence >= 0.0 AND confidence <= 1.0)",
+            name="ck_energy_score_revisions_confidence",
+        ),
+        sa.CheckConstraint(
+            "algorithm_version = btrim(algorithm_version) AND algorithm_version ~ '[^[:space:]]'",
+            name="ck_energy_score_revisions_algo_nonblank",
+        ),
+        sa.Index(
+            "ix_energy_score_revisions_user_date_calc",
+            "user_id",
+            sa.desc("target_date"),
+            sa.desc("calculated_at"),
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, server_default=sa.text("gen_random_uuid()")
+    )
+    user_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True), owner_fk("fk_energy_score_revisions_profile"), nullable=False
+    )
+    target_date: Mapped[date] = mapped_column(sa.Date, nullable=False)
+    status: Mapped[str] = mapped_column(sa.String(20), nullable=False)
+    score: Mapped[Decimal | None] = mapped_column(sa.Numeric(5, 2), nullable=True)
+    energy_level: Mapped[str | None] = mapped_column(sa.String(10), nullable=True)
+    confidence: Mapped[float | None] = mapped_column(sa.Float, nullable=True)
+    algorithm_version: Mapped[str] = mapped_column(sa.String(40), nullable=False)
+    result: Mapped[dict | list] = mapped_column(JSONB, nullable=False)
+    calculated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=sa.text("now()")
+    )
+
+
+class EnergyFeedback(Base):
+    __tablename__ = "energy_feedback"
+    __table_args__ = (
+        sa.PrimaryKeyConstraint("id", name="pk_energy_feedback"),
+        sa.UniqueConstraint("user_id", "target_date", name="uq_energy_feedback_user_target_date"),
+        sa.CheckConstraint("felt_energy BETWEEN 1 AND 5", name="ck_energy_feedback_felt_energy"),
+        sa.CheckConstraint(
+            "score_at_feedback IS NULL OR (score_at_feedback >= 0.0 AND score_at_feedback <= 100.0)",
+            name="ck_energy_feedback_score_range",
+        ),
+        sa.CheckConstraint(
+            "level_at_feedback IS NULL OR level_at_feedback IN ('LOW', 'MEDIUM', 'HIGH')",
+            name="ck_energy_feedback_level",
+        ),
+        sa.Index("ix_energy_feedback_user_date", "user_id", "target_date"),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, server_default=sa.text("gen_random_uuid()")
+    )
+    user_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True), owner_fk("fk_energy_feedback_profile"), nullable=False
+    )
+    target_date: Mapped[date] = mapped_column(sa.Date, nullable=False)
+    felt_energy: Mapped[int] = mapped_column(sa.SmallInteger, nullable=False)
+    score_at_feedback: Mapped[Decimal | None] = mapped_column(sa.Numeric(5, 2), nullable=True)
+    level_at_feedback: Mapped[str | None] = mapped_column(sa.String(10), nullable=True)
+    algorithm_version: Mapped[str | None] = mapped_column(sa.String(40), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=sa.text("now()")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=sa.text("now()"),
+        server_onupdate=sa.FetchedValue(),
+    )

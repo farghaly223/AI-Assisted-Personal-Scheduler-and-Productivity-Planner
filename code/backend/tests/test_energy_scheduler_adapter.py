@@ -8,9 +8,10 @@ import pytest
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
-from app.modules.energy.algorithms.energy.workload_calculator import TaskLoad
+from app.modules.energy.algorithms.energy.workload_calculator import TaskLoad, calculate_workload
 from app.modules.energy.services.recovery import get_local_day_bounds
 from app.modules.energy.services.scheduler_adapter import (
+    EventIntervals,
     load_event_intervals,
     load_task_loads,
 )
@@ -74,11 +75,17 @@ def test_fixed_vs_flexible_counting(database, test_users):
         session.commit()
 
         loads = load_task_loads(session, user1, day_start, day_end)
-        assert len(loads) == 2
-        durations = sorted([item.duration_minutes for item in loads])
-        assert durations == [45, 90]
-        for item in loads:
-            assert item.completed is None
+        # FLEXIBLE task stays TaskLoad; FIXED task becomes a clipped interval
+        assert len(loads) == 1
+        assert loads[0].duration_minutes == 45
+        assert loads[0].completed is None
+        assert loads.fixed_intervals == [
+            (
+                datetime(2026, 11, 20, 10, 0, tzinfo=timezone.utc),
+                datetime(2026, 11, 20, 11, 30, tzinfo=timezone.utc),
+            )
+        ]
+        assert loads.extra_high_priority_tasks == 1
 
 
 def test_flexible_with_no_deadline_not_counted(database, test_users):
@@ -128,12 +135,110 @@ def test_fixed_crossing_midnight_overlap_clipping(database, test_users):
         session.commit()
 
         loads_day1 = load_task_loads(session, user1, day1_start, day1_end)
-        assert len(loads_day1) == 1
-        assert loads_day1[0].duration_minutes == 60  # min(120, 60 minutes of overlap)
+        assert len(loads_day1) == 0
+        assert loads_day1.fixed_intervals == [
+            (
+                datetime(2026, 11, 20, 23, 0, tzinfo=timezone.utc),
+                datetime(2026, 11, 21, 0, 0, tzinfo=timezone.utc),
+            )
+        ]
 
         loads_day2 = load_task_loads(session, user1, day2_start, day2_end)
-        assert len(loads_day2) == 1
-        assert loads_day2[0].duration_minutes == 60  # min(120, 60 minutes of overlap)
+        assert len(loads_day2) == 0
+        assert loads_day2.fixed_intervals == [
+            (
+                datetime(2026, 11, 21, 0, 0, tzinfo=timezone.utc),
+                datetime(2026, 11, 21, 1, 0, tzinfo=timezone.utc),
+            )
+        ]
+
+
+def test_fixed_task_and_event_same_time_counted_once(database, test_users):
+    """A FIXED task and an Event covering the same interval must be unioned and counted once."""
+    user1, _ = test_users
+    day_start = datetime(2026, 11, 20, 0, 0, tzinfo=timezone.utc)
+    day_end = datetime(2026, 11, 21, 0, 0, tzinfo=timezone.utc)
+
+    with Session(database.admin) as session:
+        session.add(
+            Task(
+                user_id=user1,
+                title="Deep Work Block",
+                task_type="FIXED",
+                estimated_duration_minutes=120,
+                category="WORK",
+                priority=5,
+                fixed_start_at=datetime(2026, 11, 20, 9, 0, tzinfo=timezone.utc),
+                fixed_end_at=datetime(2026, 11, 20, 11, 0, tzinfo=timezone.utc),
+                status="UNSCHEDULED",
+            )
+        )
+        session.add(
+            Event(
+                user_id=user1,
+                title="Calendar Block Same Time",
+                category="WORK",
+                recurrence_type="ONCE",
+                start_at=datetime(2026, 11, 20, 9, 0, tzinfo=timezone.utc),
+                end_at=datetime(2026, 11, 20, 11, 0, tzinfo=timezone.utc),
+                source="MANUAL",
+                status="SAVED",
+            )
+        )
+        session.commit()
+
+        loads = load_task_loads(session, user1, day_start, day_end)
+        events = load_event_intervals(session, user1, day_start, day_end)
+        combined = EventIntervals([*loads.fixed_intervals, *events])
+        summary = calculate_workload(
+            loads,
+            combined,
+            day_start,
+            day_end,
+            extra_high_priority_tasks=loads.extra_high_priority_tasks,
+        )
+        assert summary.has_data is True
+        assert summary.total_task_minutes == 0
+        assert summary.fixed_event_minutes == 120
+        assert summary.high_priority_tasks == 1
+
+
+def test_fixed_task_only_has_data_and_high_priority(database, test_users):
+    """When only a FIXED task exists (no FLEXIBLE tasks, no Events), has_data must be True."""
+    user1, _ = test_users
+    day_start = datetime(2026, 11, 20, 0, 0, tzinfo=timezone.utc)
+    day_end = datetime(2026, 11, 21, 0, 0, tzinfo=timezone.utc)
+
+    with Session(database.admin) as session:
+        session.add(
+            Task(
+                user_id=user1,
+                title="Only Fixed Task",
+                task_type="FIXED",
+                estimated_duration_minutes=60,
+                category="STUDY",
+                priority=4,
+                fixed_start_at=datetime(2026, 11, 20, 14, 0, tzinfo=timezone.utc),
+                fixed_end_at=datetime(2026, 11, 20, 15, 0, tzinfo=timezone.utc),
+                status="UNSCHEDULED",
+            )
+        )
+        session.commit()
+
+        loads = load_task_loads(session, user1, day_start, day_end)
+        events = load_event_intervals(session, user1, day_start, day_end)
+        combined = EventIntervals([*loads.fixed_intervals, *events])
+        summary = calculate_workload(
+            loads,
+            combined,
+            day_start,
+            day_end,
+            extra_high_priority_tasks=loads.extra_high_priority_tasks,
+        )
+        assert summary.has_data is True
+        assert summary.total_task_minutes == 0
+        assert summary.fixed_event_minutes == 60
+        assert summary.high_priority_tasks == 1
 
 
 def test_once_event_crossing_midnight(database, test_users):

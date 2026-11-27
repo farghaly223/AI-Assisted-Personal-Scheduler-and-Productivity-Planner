@@ -82,6 +82,8 @@ def calculate_workload(
     day_end: datetime,
     config: EnergyConfig = DEFAULT_ENERGY_CONFIG,
     *,
+    available_minutes: int | None = None,
+    extra_high_priority_tasks: int = 0,
     truncated: bool = False,
 ) -> WorkloadSummary:
     """Calculate aggregated workload metrics for a local day.
@@ -92,14 +94,38 @@ def calculate_workload(
         day_start: Timezone-aware start of the local day.
         day_end: Timezone-aware end of the local day.
         config: EnergyConfig instance with thresholds and parameters.
+        available_minutes: Optional waking minutes override (1..1440); falls back to config.available_minutes.
+        extra_high_priority_tasks: Additional high-priority count (e.g. FIXED tasks merged into intervals).
 
     Returns:
         WorkloadSummary with total/completed minutes, load_ratio, level, and has_data flag.
 
     Raises:
         ValueError: If dates are naive, day_end <= day_start, event end <= start,
-            or task validation fails.
+            available_minutes/extra_high_priority_tasks invalid, or task validation fails.
     """
+    if available_minutes is not None:
+        if isinstance(available_minutes, bool) or not isinstance(available_minutes, int):
+            raise ValueError(
+                f"Invalid available_minutes type: {type(available_minutes).__name__}. Expected int."
+            )
+        if available_minutes < 1 or available_minutes > 1440:
+            raise ValueError(
+                f"available_minutes {available_minutes} out of valid range 1..1440."
+            )
+        eff_available_minutes = available_minutes
+    else:
+        eff_available_minutes = config.available_minutes
+
+    if isinstance(extra_high_priority_tasks, bool) or not isinstance(extra_high_priority_tasks, int):
+        raise ValueError(
+            f"Invalid extra_high_priority_tasks type: {type(extra_high_priority_tasks).__name__}. Expected int."
+        )
+    if extra_high_priority_tasks < 0:
+        raise ValueError(
+            f"extra_high_priority_tasks {extra_high_priority_tasks} must be non-negative."
+        )
+
     if not isinstance(day_start, datetime) or not isinstance(day_end, datetime):
         raise ValueError("day_start and day_end must be datetime instances")
 
@@ -139,7 +165,7 @@ def calculate_workload(
         )
 
     # Empty inputs represent absence of data, NOT a light day
-    if len(tasks) == 0 and len(events) == 0:
+    if len(tasks) == 0 and len(events) == 0 and extra_high_priority_tasks == 0:
         return WorkloadSummary(
             total_task_minutes=0,
             completed_task_minutes=0,
@@ -154,7 +180,7 @@ def calculate_workload(
     # 1. Process tasks
     total_task_minutes = 0
     completed_task_minutes: int | None = 0
-    high_priority_tasks = 0
+    high_priority_tasks = extra_high_priority_tasks
     has_unknown_completion = False
 
     for task in tasks:
@@ -200,7 +226,7 @@ def calculate_workload(
 
     # 3. Calculate load ratio and categorical level
     total_busy_minutes = Decimal(total_task_minutes + fixed_event_minutes)
-    raw_ratio = total_busy_minutes / Decimal(config.available_minutes)
+    raw_ratio = total_busy_minutes / Decimal(eff_available_minutes)
     capped_ratio = min(Decimal(str(config.max_load_ratio)), raw_ratio)
     load_ratio_float = float(capped_ratio.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP))
 

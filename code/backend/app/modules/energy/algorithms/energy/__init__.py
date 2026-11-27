@@ -1,6 +1,7 @@
 """Energy scoring and workload algorithms package."""
 
 from app.modules.energy.algorithms.energy.config import (
+    ALGORITHM_VERSION,
     DEFAULT_ENERGY_CONFIG,
     EnergyConfig,
     VALID_ENERGY_LEVELS,
@@ -23,6 +24,7 @@ from app.modules.energy.algorithms.energy.workload_calculator import (
 )
 
 __all__ = [
+    "ALGORITHM_VERSION",
     "DEFAULT_ENERGY_CONFIG",
     "Component",
     "EnergyConfig",

@@ -186,6 +186,48 @@ CREATE TABLE public.energy_scores (
     CONSTRAINT ck_energy_scores_recovery_level CHECK (recovery_level IS NULL OR recovery_level IN ('LOW', 'MEDIUM', 'HIGH'))
 );
 
+CREATE TABLE public.energy_score_revisions (
+    id uuid NOT NULL DEFAULT gen_random_uuid(),
+    user_id uuid NOT NULL,
+    target_date date NOT NULL,
+    status varchar(20) NOT NULL,
+    score numeric(5,2),
+    energy_level varchar(10),
+    confidence double precision,
+    algorithm_version varchar(40) NOT NULL,
+    result jsonb NOT NULL,
+    calculated_at timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT pk_energy_score_revisions PRIMARY KEY (id),
+    CONSTRAINT fk_energy_score_revisions_profile FOREIGN KEY (user_id) REFERENCES public.profiles(id) ON DELETE CASCADE ON UPDATE RESTRICT,
+    CONSTRAINT ck_energy_score_revisions_status CHECK (status IN ('ok', 'insufficient_data')),
+    CONSTRAINT ck_energy_score_revisions_status_score_level CHECK (
+        (status = 'ok' AND score IS NOT NULL AND energy_level IS NOT NULL AND confidence IS NOT NULL) OR
+        (status = 'insufficient_data' AND score IS NULL AND energy_level IS NULL AND confidence IS NULL)
+    ),
+    CONSTRAINT ck_energy_score_revisions_score_range CHECK (score IS NULL OR (score >= 0.0 AND score <= 100.0)),
+    CONSTRAINT ck_energy_score_revisions_level CHECK (energy_level IS NULL OR energy_level IN ('LOW', 'MEDIUM', 'HIGH')),
+    CONSTRAINT ck_energy_score_revisions_confidence CHECK (confidence IS NULL OR (confidence >= 0.0 AND confidence <= 1.0)),
+    CONSTRAINT ck_energy_score_revisions_algo_nonblank CHECK (algorithm_version = btrim(algorithm_version) AND algorithm_version ~ '[^[:space:]]')
+);
+
+CREATE TABLE public.energy_feedback (
+    id uuid NOT NULL DEFAULT gen_random_uuid(),
+    user_id uuid NOT NULL,
+    target_date date NOT NULL,
+    felt_energy smallint NOT NULL,
+    score_at_feedback numeric(5,2),
+    level_at_feedback varchar(10),
+    algorithm_version varchar(40),
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT pk_energy_feedback PRIMARY KEY (id),
+    CONSTRAINT fk_energy_feedback_profile FOREIGN KEY (user_id) REFERENCES public.profiles(id) ON DELETE CASCADE ON UPDATE RESTRICT,
+    CONSTRAINT uq_energy_feedback_user_target_date UNIQUE (user_id, target_date),
+    CONSTRAINT ck_energy_feedback_felt_energy CHECK (felt_energy BETWEEN 1 AND 5),
+    CONSTRAINT ck_energy_feedback_score_range CHECK (score_at_feedback IS NULL OR (score_at_feedback >= 0.0 AND score_at_feedback <= 100.0)),
+    CONSTRAINT ck_energy_feedback_level CHECK (level_at_feedback IS NULL OR level_at_feedback IN ('LOW', 'MEDIUM', 'HIGH'))
+);
+
 CREATE INDEX ix_sleep_schedules_user_id ON public.sleep_schedules (user_id);
 CREATE UNIQUE INDEX uq_sleep_sessions_user_sleep_date ON public.sleep_sessions (user_id, sleep_date) WHERE status <> 'rejected';
 CREATE INDEX ix_sleep_sessions_user_start ON public.sleep_sessions (user_id, start_time);
@@ -199,6 +241,8 @@ CREATE INDEX ix_focus_sessions_user_start ON public.focus_sessions (user_id, sta
 CREATE INDEX ix_recovery_periods_user_start ON public.recovery_periods (user_id, start_time);
 CREATE INDEX ix_energy_scores_user_calculated ON public.energy_scores (user_id, calculated_at);
 CREATE INDEX ix_energy_scores_user_date ON public.energy_scores (user_id, target_date);
+CREATE INDEX ix_energy_score_revisions_user_date_calc ON public.energy_score_revisions (user_id, target_date DESC, calculated_at DESC);
+CREATE INDEX ix_energy_feedback_user_date ON public.energy_feedback (user_id, target_date);
 
 CREATE FUNCTION public.energy_validate_timezone() RETURNS trigger
 LANGUAGE plpgsql SET search_path = '' AS $function$
@@ -241,6 +285,9 @@ FOR EACH ROW EXECUTE FUNCTION public.scheduler_set_updated_at();
 CREATE TRIGGER energy_scores_updated_at BEFORE UPDATE ON public.energy_scores
 FOR EACH ROW EXECUTE FUNCTION public.scheduler_set_updated_at();
 
+CREATE TRIGGER energy_feedback_updated_at BEFORE UPDATE ON public.energy_feedback
+FOR EACH ROW EXECUTE FUNCTION public.scheduler_set_updated_at();
+
 ALTER TABLE public.sleep_schedules ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.sleep_sessions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.sleep_usage_signals ENABLE ROW LEVEL SECURITY;
@@ -249,6 +296,8 @@ ALTER TABLE public.recovery_strategies ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.focus_sessions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.recovery_periods ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.energy_scores ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.energy_score_revisions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.energy_feedback ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY sleep_schedules_select_own ON public.sleep_schedules FOR SELECT TO authenticated USING (user_id = (SELECT auth.uid()));
 CREATE POLICY sleep_schedules_insert_own ON public.sleep_schedules FOR INSERT TO authenticated WITH CHECK (user_id = (SELECT auth.uid()));
@@ -290,6 +339,15 @@ CREATE POLICY energy_scores_insert_own ON public.energy_scores FOR INSERT TO aut
 CREATE POLICY energy_scores_update_own ON public.energy_scores FOR UPDATE TO authenticated USING (user_id = (SELECT auth.uid())) WITH CHECK (user_id = (SELECT auth.uid()));
 CREATE POLICY energy_scores_delete_own ON public.energy_scores FOR DELETE TO authenticated USING (user_id = (SELECT auth.uid()));
 
+CREATE POLICY energy_score_revisions_select_own ON public.energy_score_revisions FOR SELECT TO authenticated USING (user_id = (SELECT auth.uid()));
+CREATE POLICY energy_score_revisions_insert_own ON public.energy_score_revisions FOR INSERT TO authenticated WITH CHECK (user_id = (SELECT auth.uid()));
+CREATE POLICY energy_score_revisions_delete_own ON public.energy_score_revisions FOR DELETE TO authenticated USING (user_id = (SELECT auth.uid()));
+
+CREATE POLICY energy_feedback_select_own ON public.energy_feedback FOR SELECT TO authenticated USING (user_id = (SELECT auth.uid()));
+CREATE POLICY energy_feedback_insert_own ON public.energy_feedback FOR INSERT TO authenticated WITH CHECK (user_id = (SELECT auth.uid()));
+CREATE POLICY energy_feedback_update_own ON public.energy_feedback FOR UPDATE TO authenticated USING (user_id = (SELECT auth.uid())) WITH CHECK (user_id = (SELECT auth.uid()));
+CREATE POLICY energy_feedback_delete_own ON public.energy_feedback FOR DELETE TO authenticated USING (user_id = (SELECT auth.uid()));
+
 REVOKE ALL ON TABLE
     public.sleep_schedules,
     public.sleep_sessions,
@@ -298,7 +356,9 @@ REVOKE ALL ON TABLE
     public.recovery_strategies,
     public.focus_sessions,
     public.recovery_periods,
-    public.energy_scores
+    public.energy_scores,
+    public.energy_score_revisions,
+    public.energy_feedback
     FROM PUBLIC, anon, authenticated;
 
 GRANT SELECT, DELETE ON TABLE
@@ -309,7 +369,9 @@ GRANT SELECT, DELETE ON TABLE
     public.recovery_strategies,
     public.focus_sessions,
     public.recovery_periods,
-    public.energy_scores
+    public.energy_scores,
+    public.energy_score_revisions,
+    public.energy_feedback
     TO authenticated;
 
 GRANT INSERT (user_id, bedtime, wake_time, timezone, repeat_days, bedtime_reminder_enabled, reminder_minutes_before, wake_alarm_enabled, is_active) ON public.sleep_schedules TO authenticated;
@@ -335,9 +397,16 @@ GRANT UPDATE (start_time, end_time, duration_minutes, source, recovery_type) ON 
 
 GRANT INSERT (user_id, target_date, status, score, energy_level, confidence, sleep_duration_minutes, sleep_quality_score, sleep_quality_rating, workload_score, workload_level, recovery_score, recovery_level, insights, calculated_at) ON public.energy_scores TO authenticated;
 GRANT UPDATE (status, score, energy_level, confidence, sleep_duration_minutes, sleep_quality_score, sleep_quality_rating, workload_score, workload_level, recovery_score, recovery_level, insights, calculated_at) ON public.energy_scores TO authenticated;
+
+GRANT INSERT (user_id, target_date, status, score, energy_level, confidence, algorithm_version, result, calculated_at) ON public.energy_score_revisions TO authenticated;
+
+GRANT INSERT (user_id, target_date, felt_energy, score_at_feedback, level_at_feedback, algorithm_version) ON public.energy_feedback TO authenticated;
+GRANT UPDATE (felt_energy, score_at_feedback, level_at_feedback, algorithm_version) ON public.energy_feedback TO authenticated;
 """
 
 DOWNGRADE_SQL = """
+DROP TABLE public.energy_feedback;
+DROP TABLE public.energy_score_revisions;
 DROP TABLE public.energy_scores;
 DROP TABLE public.recovery_periods;
 DROP TABLE public.focus_sessions;

@@ -10,13 +10,17 @@ import pytest
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
+from app.modules.energy.algorithms.energy.config import ALGORITHM_VERSION
 from app.modules.energy.algorithms.sleep.sleep_quality import normalize_sleep_quality
 from app.modules.energy.models import (
+    EnergyFeedback,
     EnergyScore,
+    EnergyScoreRevision,
     FocusSession,
     RecoveryPeriod,
     RecoveryStrategy,
     SleepQualityRating,
+    SleepSchedule,
     SleepSession,
 )
 from app.modules.energy.services import energy as energy_service
@@ -714,5 +718,246 @@ def test_statement_count_in_calculate(energy_api, database):
         finally:
             sa.event.remove(database.admin, "before_cursor_execute", before_cursor_execute)
 
-    # 1 sleep + 1 tasks + 2 events + 2 recovery (strategy+sessions) + 1 upsert + 1 fetch = 8 statements
-    assert stmt_count <= 10
+    # 1 sleep + 1 sleep_schedule + 1 tasks + 2 events + 1..2 recovery + 1 upsert
+    # + 2 savepoint (SAVEPOINT/RELEASE) + 1 rev select + 1 rev insert + 1..2 fetch/refresh
+    assert stmt_count <= 14
+
+
+def test_available_minutes_from_sleep_schedule(database, test_users):
+    """Available waking minutes derive from active sleep_schedule when weekday in repeat_days."""
+    user1, _ = test_users
+    # 2026-11-20 is Friday -> weekday() == 4
+    friday = date(2026, 11, 20)
+    # 2026-11-21 is Saturday -> weekday() == 5
+    saturday = date(2026, 11, 21)
+
+    with Session(database.admin) as session:
+        # 1. Missing schedule -> fallback 960
+        assert energy_service._resolve_available_minutes(session, user1, friday) == 960
+
+        # 2. Overnight schedule (23:00 -> 05:00 = 360m sleep -> 1080m available), active on Friday (4)
+        sched = SleepSchedule(
+            user_id=user1,
+            bedtime=time(23, 0),
+            wake_time=time(5, 0),
+            timezone="UTC",
+            repeat_days=[4],
+            is_active=True,
+        )
+        session.add(sched)
+        session.commit()
+
+        assert energy_service._resolve_available_minutes(session, user1, friday) == 1080
+        # Weekday not in repeat_days -> fallback 960
+        assert energy_service._resolve_available_minutes(session, user1, saturday) == 960
+
+        # 3. Same-day window (01:00 -> 07:00 = 360m sleep -> 1080m available)
+        sched.bedtime = time(1, 0)
+        sched.wake_time = time(7, 0)
+        sched.repeat_days = [4, 5]
+        session.commit()
+        assert energy_service._resolve_available_minutes(session, user1, friday) == 1080
+
+        # 4. Clamping upper bound: 2h sleep (23:00 -> 01:00 = 120m -> 1320 clamped to 1200)
+        sched.bedtime = time(23, 0)
+        sched.wake_time = time(1, 0)
+        session.commit()
+        assert energy_service._resolve_available_minutes(session, user1, friday) == 1200
+
+        # 5. Clamping lower bound: 16h sleep (20:00 -> 12:00 = 960m -> 480 clamped to 600)
+        sched.bedtime = time(20, 0)
+        sched.wake_time = time(12, 0)
+        session.commit()
+        assert energy_service._resolve_available_minutes(session, user1, friday) == 600
+
+        # 6. Inactive schedule -> fallback 960
+        sched.is_active = False
+        session.commit()
+        assert energy_service._resolve_available_minutes(session, user1, friday) == 960
+
+
+def test_revisions_deduplication_changes_and_insufficient_data(energy_api, database):
+    """Recalculating same inputs creates 1 revision; changed inputs create a 2nd; insufficient_data stores real NULL confidence."""
+    user_id = energy_api.users[0]
+    target_d = date(2026, 11, 20)
+
+    # Case A: insufficient_data day calculated twice -> exactly 1 revision with confidence IS NULL
+    res_insuf1 = energy_api.client.post(
+        "/api/v1/energy/calculate",
+        headers=energy_api.headers,
+        json={"target_date": target_d.isoformat(), "timezone": "UTC"},
+    )
+    assert res_insuf1.status_code == 200
+    assert res_insuf1.json()["status"] == "insufficient_data"
+
+    res_insuf2 = energy_api.client.post(
+        "/api/v1/energy/calculate",
+        headers=energy_api.headers,
+        json={"target_date": target_d.isoformat(), "timezone": "UTC"},
+    )
+    assert res_insuf2.status_code == 200
+
+    with Session(database.admin) as session:
+        revs = session.scalars(
+            sa.select(EnergyScoreRevision)
+            .where(
+                EnergyScoreRevision.user_id == user_id,
+                EnergyScoreRevision.target_date == target_d,
+            )
+            .order_by(EnergyScoreRevision.calculated_at.asc(), EnergyScoreRevision.id.asc())
+        ).all()
+        assert len(revs) == 1
+        assert revs[0].status == "insufficient_data"
+        assert revs[0].score is None
+        assert revs[0].energy_level is None
+        assert revs[0].confidence is None
+        assert revs[0].algorithm_version == ALGORITHM_VERSION
+        assert revs[0].result["algorithm_version"] == ALGORITHM_VERSION
+
+    # Case B: Add confirmed sleep -> status/score/confidence change -> creates 2nd revision
+    with Session(database.admin) as session:
+        session.add(
+            SleepSession(
+                user_id=user_id,
+                sleep_date=target_d,
+                start_time=datetime(2026, 11, 19, 23, 0, tzinfo=timezone.utc),
+                end_time=datetime(2026, 11, 20, 7, 0, tzinfo=timezone.utc),
+                duration_minutes=480,
+                timezone="UTC",
+                status="confirmed",
+                source="manual",
+                confidence=1.0,
+            )
+        )
+        session.commit()
+
+    res_ok1 = energy_api.client.post(
+        "/api/v1/energy/calculate",
+        headers=energy_api.headers,
+        json={"target_date": target_d.isoformat(), "timezone": "UTC"},
+    )
+    assert res_ok1.status_code == 200
+    score_id = res_ok1.json()["id"]
+
+    # Recalculate identical ok inputs -> still 2 revisions total
+    res_ok2 = energy_api.client.post(
+        "/api/v1/energy/calculate",
+        headers=energy_api.headers,
+        json={"target_date": target_d.isoformat(), "timezone": "UTC"},
+    )
+    assert res_ok2.status_code == 200
+
+    with Session(database.admin) as session:
+        revs2 = session.scalars(
+            sa.select(EnergyScoreRevision)
+            .where(
+                EnergyScoreRevision.user_id == user_id,
+                EnergyScoreRevision.target_date == target_d,
+            )
+            .order_by(EnergyScoreRevision.calculated_at.asc(), EnergyScoreRevision.id.asc())
+        ).all()
+        assert len(revs2) == 2
+        assert revs2[1].status == "ok"
+        assert revs2[1].confidence is not None
+        assert revs2[1].algorithm_version == ALGORITHM_VERSION
+
+    # Explanation endpoint includes algorithm_version
+    res_exp = energy_api.client.get(
+        f"/api/v1/energy/explanation/{score_id}",
+        headers=energy_api.headers,
+    )
+    assert res_exp.status_code == 200
+    assert res_exp.json()["algorithm_version"] == ALGORITHM_VERSION
+
+
+def test_concurrent_calculate_no_duplicate_revisions(energy_api, database):
+    """Concurrent calculations for the same day must never 5xx and must emit only 1 identical revision."""
+    user_id = energy_api.users[0]
+    target_d = date(2026, 11, 20)
+
+    with Session(database.admin) as session:
+        session.add(
+            SleepSession(
+                user_id=user_id,
+                sleep_date=target_d,
+                start_time=datetime(2026, 11, 19, 23, 0, tzinfo=timezone.utc),
+                end_time=datetime(2026, 11, 20, 7, 0, tzinfo=timezone.utc),
+                duration_minutes=480,
+                timezone="UTC",
+                status="confirmed",
+                source="manual",
+                confidence=1.0,
+            )
+        )
+        session.commit()
+
+    def do_calc():
+        return energy_api.client.post(
+            "/api/v1/energy/calculate",
+            headers=energy_api.headers,
+            json={"target_date": target_d.isoformat(), "timezone": "UTC"},
+        )
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        futures = [executor.submit(do_calc) for _ in range(4)]
+        responses = [f.result() for f in futures]
+
+    assert all(r.status_code == 200 for r in responses)
+
+    with Session(database.admin) as session:
+        revs = session.scalars(
+            sa.select(EnergyScoreRevision).where(
+                EnergyScoreRevision.user_id == user_id,
+                EnergyScoreRevision.target_date == target_d,
+            )
+        ).all()
+        assert len(revs) == 1
+
+
+def test_revisions_and_feedback_rls_and_grants(database, signer, users):
+    """Verify append-only privileges on energy_score_revisions and owner RLS/grants on energy_feedback."""
+    from sqlalchemy.exc import DBAPIError
+
+    u0, u1 = users
+    with database.runtime.user_session(signer.token(u0), signer.verifier) as session:
+        rev = EnergyScoreRevision(
+            user_id=u0,
+            target_date=date(2026, 11, 20),
+            status="ok",
+            score=Decimal("85.00"),
+            energy_level="HIGH",
+            confidence=0.8,
+            algorithm_version=ALGORITHM_VERSION,
+            result={"schema_version": 1, "algorithm_version": ALGORITHM_VERSION, "components": [], "insights": []},
+        )
+        fb = EnergyFeedback(
+            user_id=u0,
+            target_date=date(2026, 11, 20),
+            felt_energy=4,
+            score_at_feedback=Decimal("85.00"),
+            level_at_feedback="HIGH",
+            algorithm_version=ALGORITHM_VERSION,
+        )
+        session.add_all([rev, fb])
+        session.flush()
+        rev_id = rev.id
+        fb_id = fb.id
+
+    # UPDATE on energy_score_revisions must be denied (no UPDATE grant)
+    with pytest.raises(DBAPIError) as err, database.runtime.user_session(signer.token(u0), signer.verifier) as session:
+        session.execute(
+            sa.update(EnergyScoreRevision).where(EnergyScoreRevision.id == rev_id).values(status="insufficient_data")
+        )
+    assert err.value.orig.sqlstate == "42501"
+
+    # Cross-user isolation and own feedback update
+    with database.runtime.user_session(signer.token(u1), signer.verifier) as session:
+        assert session.scalars(sa.select(EnergyScoreRevision)).all() == []
+        assert session.scalars(sa.select(EnergyFeedback)).all() == []
+
+    with database.runtime.user_session(signer.token(u0), signer.verifier) as session:
+        session.execute(
+            sa.update(EnergyFeedback).where(EnergyFeedback.id == fb_id).values(felt_energy=5)
+        )
+        row = session.scalar(sa.select(EnergyFeedback).where(EnergyFeedback.id == fb_id))
+        assert row.felt_energy == 5

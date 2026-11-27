@@ -400,6 +400,7 @@ class EnergyExplanationRead(Contract):
     insight_details: list[InsightDetailRead] = Field(default_factory=list)
     components: list[ComponentRead] = Field(default_factory=list)
     confidence_breakdown: dict = Field(default_factory=dict)
+    algorithm_version: str | None = None
     calculated_at: datetime
 
 

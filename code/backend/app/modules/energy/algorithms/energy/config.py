@@ -20,12 +20,13 @@ SCORING FORMULAS AND PROPERTIES:
      where penalty = min(high_priority_penalty_max, high_priority_tasks * penalty_per_task).
 
 2. Sleep Scoring:
+   - Sleep scoring boundaries:
    - Duration score is piecewise linear:
-     * duration < sleep_hard_min (180m): 0.0
-     * sleep_hard_min <= duration < sleep_optimal_min (420m): 0.0 -> 100.0 linear interpolation
+     * duration <= sleep_hard_min (180m): 0.0
+     * sleep_hard_min < duration < sleep_optimal_min (420m): 0.0 -> 100.0 linear interpolation
      * sleep_optimal_min <= duration <= sleep_optimal_max (540m): 100.0 (optimal 7-9 hours)
-     * sleep_optimal_max < duration <= sleep_hard_max (840m): 100.0 -> 50.0 (long_sleep_floor)
-     * duration > sleep_hard_max: 50.0 (floor)
+     * sleep_optimal_max < duration <= sleep_long_max (660m): 100.0 -> 85.0 (long_sleep_floor)
+     * duration > sleep_long_max: 85.0 (floor)
    - Blending with subjective rating:
      * If rated: sleep_score = (1 - w_q) * duration_score + w_q * normalize_sleep_quality(rating)
        where w_q = sleep_quality_blend (default 0.3).
@@ -65,6 +66,7 @@ import math
 from typing import Sequence
 
 
+ALGORITHM_VERSION = "energy-algo-2"
 VALID_FACTOR_NAMES = frozenset({"sleep", "workload", "recovery"})
 VALID_ENERGY_LEVELS = frozenset({"LOW", "MEDIUM", "HIGH"})
 VALID_WORKLOAD_LEVELS = frozenset({"LOW", "MEDIUM", "HIGH"})
@@ -95,8 +97,8 @@ class EnergyConfig:
     sleep_hard_min: int = 180       # 3 hours minimum
     sleep_optimal_min: int = 420    # 7 hours optimal lower bound
     sleep_optimal_max: int = 540    # 9 hours optimal upper bound
-    sleep_hard_max: int = 840       # 14 hours maximum
-    sleep_long_sleep_floor: float = 50.0
+    sleep_long_max: int = 660       # 11 hours long-sleep floor point
+    sleep_long_sleep_floor: float = 85.0
     sleep_quality_blend: float = 0.30
 
     # Factor weights (must be positive and sum to 1.0)
@@ -147,7 +149,7 @@ class EnergyConfig:
                 )
 
         # Validate boundaries
-        if not (0 < self.sleep_hard_min < self.sleep_optimal_min <= self.sleep_optimal_max < self.sleep_hard_max):
+        if not (0 < self.sleep_hard_min < self.sleep_optimal_min <= self.sleep_optimal_max < self.sleep_long_max):
             raise ValueError("Invalid sleep duration boundaries ordering.")
 
         if not (0.0 <= self.sleep_long_sleep_floor <= 100.0):

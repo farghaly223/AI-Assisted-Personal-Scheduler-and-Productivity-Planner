@@ -1,7 +1,9 @@
-﻿BEGIN;
+BEGIN;
 
 -- Running downgrade 0002_energy -> 0001_sprint1
 
+DROP TABLE public.energy_feedback;
+DROP TABLE public.energy_score_revisions;
 DROP TABLE public.energy_scores;
 DROP TABLE public.recovery_periods;
 DROP TABLE public.focus_sessions;

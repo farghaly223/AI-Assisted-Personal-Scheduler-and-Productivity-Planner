@@ -178,17 +178,17 @@ def calculate_energy(
         h_min = Decimal(config.sleep_hard_min)
         opt_min = Decimal(config.sleep_optimal_min)
         opt_max = Decimal(config.sleep_optimal_max)
-        h_max = Decimal(config.sleep_hard_max)
+        long_max = Decimal(config.sleep_long_max)
         long_floor = Decimal(str(config.sleep_long_sleep_floor))
 
-        if dur < h_min:
+        if dur <= h_min:
             dur_score = Decimal("0.0")
         elif dur < opt_min:
             dur_score = Decimal("100.0") * (dur - h_min) / (opt_min - h_min)
         elif dur <= opt_max:
             dur_score = Decimal("100.0")
-        elif dur <= h_max:
-            decay_slope = (Decimal("100.0") - long_floor) / (h_max - opt_max)
+        elif dur <= long_max:
+            decay_slope = (Decimal("100.0") - long_floor) / (long_max - opt_max)
             dur_score = Decimal("100.0") - decay_slope * (dur - opt_max)
         else:
             dur_score = long_floor
@@ -351,7 +351,7 @@ def calculate_energy(
             insights_list.append(
                 Insight(
                     code="SLEEP_SHORT",
-                    message="Sleep duration is below optimal range",
+                    message="Sleep duration is below 7 hours",
                 )
             )
         # 5. SLEEP_LONG
@@ -359,7 +359,7 @@ def calculate_energy(
             insights_list.append(
                 Insight(
                     code="SLEEP_LONG",
-                    message="Sleep duration is above optimal range",
+                    message="Sleep duration is above 9 hours",
                 )
             )
 

@@ -15,11 +15,15 @@ from zoneinfo import ZoneInfo
 
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.errors import APIError
 from app.core.timezones import validate_timezone_name
-from app.modules.energy.algorithms.energy.config import DEFAULT_ENERGY_CONFIG
+from app.modules.energy.algorithms.energy.config import (
+    ALGORITHM_VERSION,
+    DEFAULT_ENERGY_CONFIG,
+)
 from app.modules.energy.algorithms.energy.energy_calculator import (
     RecoveryInput,
     SleepInput,
@@ -27,13 +31,20 @@ from app.modules.energy.algorithms.energy.energy_calculator import (
 )
 from app.modules.energy.algorithms.energy.workload_calculator import calculate_workload
 from app.modules.energy.algorithms.sleep.sleep_quality import normalize_sleep_quality
-from app.modules.energy.models import EnergyScore, SleepQualityRating, SleepSession
+from app.modules.energy.models import (
+    EnergyScore,
+    EnergyScoreRevision,
+    SleepQualityRating,
+    SleepSchedule,
+    SleepSession,
+)
 from app.modules.energy.services.recovery import (
     compute_recovery_for_day,
     get_local_day_bounds,
     get_recovery_summary,
 )
 from app.modules.energy.services.scheduler_adapter import (
+    EventIntervals,
     load_event_intervals,
     load_task_loads,
 )
@@ -88,8 +99,12 @@ def to_energy_explanation_dict(row: EnergyScore) -> dict:
     base = to_energy_score_dict(row)
     insights_json = row.insights or {}
     components: list[dict] = []
+    algorithm_version: str | None = None
     if isinstance(insights_json, dict):
         components = insights_json.get("components", [])
+        raw_ver = insights_json.get("algorithm_version")
+        if isinstance(raw_ver, str):
+            algorithm_version = raw_ver
 
     confidence_breakdown = {
         "overall_confidence": base["confidence"],
@@ -98,7 +113,72 @@ def to_energy_explanation_dict(row: EnergyScore) -> dict:
 
     base["components"] = components
     base["confidence_breakdown"] = confidence_breakdown
+    base["algorithm_version"] = algorithm_version
     return base
+
+
+def _resolve_available_minutes(
+    session: Session,
+    user_id: UUID,
+    target_date: date,
+) -> int:
+    """Derive available waking minutes from the user's active sleep_schedule for target_date.
+
+    Uses the schedule only when is_active is True AND target_date.weekday() is in repeat_days.
+    Computes clamp(1440 - sleep_window_minutes, 600, 1200) (overnight-aware), falling back to
+    DEFAULT_ENERGY_CONFIG.available_minutes (960) otherwise.
+    """
+    schedule = session.scalar(
+        sa.select(SleepSchedule).where(
+            SleepSchedule.user_id == user_id,
+            SleepSchedule.is_active == True,
+        )
+    )
+    if schedule is None or target_date.weekday() not in schedule.repeat_days:
+        return DEFAULT_ENERGY_CONFIG.available_minutes
+
+    bed_sec = schedule.bedtime.hour * 3600 + schedule.bedtime.minute * 60 + schedule.bedtime.second
+    wake_sec = schedule.wake_time.hour * 3600 + schedule.wake_time.minute * 60 + schedule.wake_time.second
+    if wake_sec > bed_sec:
+        sleep_seconds = wake_sec - bed_sec
+    else:
+        sleep_seconds = 86400 - bed_sec + wake_sec
+
+    sleep_window_minutes = int(round(sleep_seconds / 60.0))
+    return max(600, min(1200, 1440 - sleep_window_minutes))
+
+
+def _compute_workload_summary(
+    session: Session,
+    user_id: UUID,
+    target_date: date,
+    day_start_utc: datetime,
+    day_end_utc: datetime,
+):
+    available_minutes = _resolve_available_minutes(session, user_id, target_date)
+    task_loads = load_task_loads(
+        session,
+        user_id,
+        day_start_utc,
+        day_end_utc,
+        high_priority_min=DEFAULT_ENERGY_CONFIG.high_priority_min,
+    )
+    event_intervals = load_event_intervals(
+        session, user_id, day_start_utc, day_end_utc, target_date=target_date
+    )
+    combined_intervals = EventIntervals(
+        [*task_loads.fixed_intervals, *event_intervals],
+        truncated=task_loads.truncated or event_intervals.truncated,
+    )
+    return calculate_workload(
+        task_loads,
+        combined_intervals,
+        day_start_utc,
+        day_end_utc,
+        available_minutes=available_minutes,
+        extra_high_priority_tasks=task_loads.extra_high_priority_tasks,
+        truncated=combined_intervals.truncated,
+    )
 
 
 def get_daily_workload(
@@ -110,18 +190,19 @@ def get_daily_workload(
     date: date | None = None,
     timezone: str | None = None,
 ) -> dict:
-    """Internal interface (Design Doc section 8): Compute live daily workload metrics."""
+    """Internal interface (Design Doc section 8): Compute live daily workload metrics.
+
+    FIXED tasks are converted to clipped intervals and unioned with calendar events so
+    `fixed_event_duration` includes both FIXED tasks and events without double-counting,
+    while `total_task_duration` and `completed_task_duration` cover FLEXIBLE tasks only.
+    """
     the_date = target_date if target_date is not None else date
     if the_date is None:
         raise APIError(422, "invalid_request", "date or target_date is required")
     the_tz = timezone if timezone is not None else timezone_name
 
     day_start_utc, day_end_utc = get_local_day_bounds(the_date, the_tz)
-    tasks = load_task_loads(session, user_id, day_start_utc, day_end_utc)
-    events = load_event_intervals(
-        session, user_id, day_start_utc, day_end_utc, target_date=the_date
-    )
-    summary = calculate_workload(tasks, events, day_start_utc, day_end_utc)
+    summary = _compute_workload_summary(session, user_id, the_date, day_start_utc, day_end_utc)
 
     return {
         "total_task_duration": summary.total_task_minutes,
@@ -232,11 +313,9 @@ def calculate_energy_for_date(
 
     # (2) Workload factor
     day_start_utc, day_end_utc = get_local_day_bounds(target_date, valid_zone)
-    tasks = load_task_loads(session, user_id, day_start_utc, day_end_utc)
-    events = load_event_intervals(
-        session, user_id, day_start_utc, day_end_utc, target_date=target_date
+    workload_summary = _compute_workload_summary(
+        session, user_id, target_date, day_start_utc, day_end_utc
     )
-    workload_summary = calculate_workload(tasks, events, day_start_utc, day_end_utc)
 
     # (3) Recovery factor
     recovery_res = compute_recovery_for_day(
@@ -323,6 +402,7 @@ def calculate_energy_for_date(
 
     insights_data = {
         "schema_version": 1,
+        "algorithm_version": ALGORITHM_VERSION,
         "components": [
             {
                 "name": c.name,
@@ -381,6 +461,62 @@ def calculate_energy_for_date(
 
     score_id = session.scalar(upsert_stmt)
     session.flush()
+
+    # The upsert on energy_scores row-locks (user_id, target_date) until commit,
+    # so the revision check and insert that follow are serialized per day.
+    # Compare against the algorithm result values (e.g. confidence=None when
+    # insufficient_data), NOT the stored energy_scores columns (confidence=0.0).
+    rev_confidence_val = (
+        float(energy_result.confidence)
+        if status == "ok" and energy_result.confidence is not None
+        else None
+    )
+    try:
+        with session.begin_nested():
+            latest_rev = session.execute(
+                sa.select(
+                    EnergyScoreRevision.status,
+                    EnergyScoreRevision.score,
+                    EnergyScoreRevision.energy_level,
+                    EnergyScoreRevision.confidence,
+                    EnergyScoreRevision.algorithm_version,
+                )
+                .where(
+                    EnergyScoreRevision.user_id == user_id,
+                    EnergyScoreRevision.target_date == target_date,
+                )
+                .order_by(
+                    EnergyScoreRevision.calculated_at.desc(),
+                    EnergyScoreRevision.id.desc(),
+                )
+                .limit(1)
+            ).first()
+
+            should_insert_rev = latest_rev is None or (
+                latest_rev.status != status
+                or latest_rev.score != score_val
+                or latest_rev.energy_level != energy_level_val
+                or latest_rev.confidence != rev_confidence_val
+                or latest_rev.algorithm_version != ALGORITHM_VERSION
+            )
+            if should_insert_rev:
+                session.add(
+                    EnergyScoreRevision(
+                        user_id=user_id,
+                        target_date=target_date,
+                        status=status,
+                        score=score_val,
+                        energy_level=energy_level_val,
+                        confidence=rev_confidence_val,
+                        algorithm_version=ALGORITHM_VERSION,
+                        result=insights_data,
+                        calculated_at=now_utc,
+                    )
+                )
+                session.flush()
+    except IntegrityError:
+        # Savepoint rolled back; never fail the request on revision conflict.
+        pass
 
     row = session.scalar(
         sa.select(EnergyScore).where(

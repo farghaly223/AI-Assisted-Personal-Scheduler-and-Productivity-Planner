@@ -704,6 +704,62 @@ def test_recovery_summary(energy_api):
     assert by_src["PLANNED"] == 0
 
 
+def test_get_focus_summary_interface(energy_api):
+    """Internal interface get_focus_summary is read-only, owner-filtered, and DST-safe."""
+    user0 = energy_api.users[0]
+    user1 = energy_api.users[1]
+    day = date(2026, 11, 22)
+
+    with Session(energy_api.database.admin) as s:
+        # 2026-11-21 22:30 UTC == 2026-11-22 00:30 Africa/Cairo -> included on 2026-11-22 in Cairo
+        s.add(
+            FocusSession(
+                user_id=user0,
+                start_time=datetime(2026, 11, 21, 22, 30, tzinfo=timezone.utc),
+                end_time=datetime(2026, 11, 21, 22, 55, tzinfo=timezone.utc),
+                duration_minutes=25,
+                status="COMPLETED",
+            )
+        )
+        # In-progress session for user0 on 2026-11-22 Cairo
+        s.add(
+            FocusSession(
+                user_id=user0,
+                start_time=datetime(2026, 11, 22, 8, 0, tzinfo=timezone.utc),
+                end_time=None,
+                duration_minutes=None,
+                status="IN_PROGRESS",
+            )
+        )
+        # Other user's completed session must NOT be counted for user0
+        s.add(
+            FocusSession(
+                user_id=user1,
+                start_time=datetime(2026, 11, 22, 9, 0, tzinfo=timezone.utc),
+                end_time=datetime(2026, 11, 22, 9, 50, tzinfo=timezone.utc),
+                duration_minutes=50,
+                status="COMPLETED",
+            )
+        )
+        s.commit()
+
+        summary_u0 = recovery_service.get_focus_summary(
+            s, user_id=user0, date=day, timezone="Africa/Cairo"
+        )
+        assert summary_u0 == {
+            "completed_sessions": 1,
+            "total_focus_minutes": 25,
+            "in_progress": True,
+        }
+
+        summary_u1 = recovery_service.get_focus_summary(s, user1, day, "Africa/Cairo")
+        assert summary_u1 == {
+            "completed_sessions": 1,
+            "total_focus_minutes": 50,
+            "in_progress": False,
+        }
+
+
 # 22. DST transition tests in Africa/Cairo (2026 transition dates: 23h and 25h days) & invalid timezone 422
 def test_africa_cairo_dst_transitions(energy_api):
     # Invalid timezone query param returns 422

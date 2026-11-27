@@ -562,15 +562,19 @@ def detect_recovery(
     }
 
 
-def get_recovery_summary(
+def get_focus_summary(
     session: Session,
     user_id: UUID,
-    target_date: date,
-    timezone_name: str = "UTC",
+    date: date,
+    timezone: str = "UTC",
 ) -> dict:
-    day_start_utc, day_end_utc = get_local_day_bounds(target_date, timezone_name)
+    """Internal read-only interface: owner-filtered focus session summary for a local date.
 
-    # 1. Aggregation on focus sessions
+    Energy is the single owner of `focus_sessions`; other modules must call this interface
+    instead of querying `focus_sessions` directly.
+    """
+    day_start_utc, day_end_utc = get_local_day_bounds(date, timezone)
+
     focus_agg = session.execute(
         sa.select(
             sa.func.count().filter(FocusSession.status == "COMPLETED"),
@@ -584,9 +588,23 @@ def get_recovery_summary(
         )
     ).one()
 
-    completed_count = int(focus_agg[0])
-    total_focus_min = int(focus_agg[1])
-    in_progress = bool(focus_agg[2])
+    return {
+        "completed_sessions": int(focus_agg[0]),
+        "total_focus_minutes": int(focus_agg[1]),
+        "in_progress": bool(focus_agg[2]),
+    }
+
+
+def get_recovery_summary(
+    session: Session,
+    user_id: UUID,
+    target_date: date,
+    timezone_name: str = "UTC",
+) -> dict:
+    day_start_utc, day_end_utc = get_local_day_bounds(target_date, timezone_name)
+
+    # 1. Aggregation on focus sessions via internal read-only interface
+    focus_summary = get_focus_summary(session, user_id, target_date, timezone_name)
 
     # 2. Aggregation on recovery periods
     periods_agg = session.execute(
@@ -620,9 +638,9 @@ def get_recovery_summary(
     return {
         "date": target_date,
         "timezone": timezone_name,
-        "focus_sessions_completed": completed_count,
-        "total_focus_minutes": total_focus_min,
-        "in_progress": in_progress,
+        "focus_sessions_completed": focus_summary["completed_sessions"],
+        "total_focus_minutes": focus_summary["total_focus_minutes"],
+        "in_progress": focus_summary["in_progress"],
         "recovery_minutes_by_source": recovery_by_source,
         "total_recovery_minutes": total_rec_min,
         "periods_count": total_periods,

@@ -486,22 +486,24 @@ Explanation endpoint (`GET /energy/explanation/{id}`):
     "overall_confidence": 0.85,
     "status": "ok"
   },
+  "algorithm_version": "energy-algo-2",
   "calculated_at": "2026-11-22T10:00:00Z"
 }
 ```
 
 Daily summary (`GET /energy/daily-summary?date=2026-11-22&timezone=Africa/Cairo`):
-Read-only aggregation returning the stored energy score (or null), sleep summary (status, duration, rating, score), live workload metrics, and recovery summary.
+Read-only aggregation returning the stored energy score (or null), sleep summary (status, duration, rating, score), live workload metrics, and recovery summary. Note: in `workload`, `fixed_event_duration` includes the merged interval union of calendar events and `FIXED` tasks, while `total_task_duration` and `completed_task_duration` cover `FLEXIBLE` tasks only.
 
 Architecture and Scheduler Coupling:
+- See [energy-module.md](energy-module.md) for Energy table ownership, cross-module internal interfaces (`get_focus_summary` for `focus_sessions`, `get_daily_workload`, `get_current_energy`), and adapter coupling rules.
 - Scheduler coupling is isolated strictly to `app/modules/energy/services/scheduler_adapter.py`.
 - It executes only SELECT queries with verified owner filtering on `tasks` and `events`. Titles, locations, and personal text are never read into energy objects.
-- FIXED tasks count `min(estimated_duration_minutes, minutes of overlap with local day)`.
-- FLEXIBLE tasks count only when their deadline falls within the local day window.
-- Known limitation: A FIXED task and a calendar event covering the same interval can both be counted in total cognitive demand.
+- `FIXED` tasks overlapping the local day are converted to clipped intervals and unioned with calendar event intervals so overlapping time is never double-counted (`fixed_event_duration` includes both calendar events and `FIXED` tasks).
+- `FLEXIBLE` tasks count only when their deadline falls within the local day window (`total_task_duration` and `completed_task_duration` cover `FLEXIBLE` tasks only).
+- Workload `available_minutes` is derived from the user's active `sleep_schedule` when `target_date`'s weekday is in `repeat_days` (`clamp(1440 - sleep_window_minutes, 600, 1200)`), falling back to `960`.
 - WEEKLY events are prefiltered in SQL using recurrence columns and expanded deterministically in the event's timezone with `fold=0` (nonexistent times shift forward; ambiguous times choose first occurrence).
 - Row reading is capped (limit+1). If tasks or events exceed limit, the workload factor is treated as unavailable with insight `WORKLOAD_TRUNCATED`.
-- Upsert into `energy_scores` is idempotent on `(user_id, target_date)` (`DO UPDATE`).
+- Upsert into `energy_scores` is idempotent on `(user_id, target_date)` (`DO UPDATE`) and stores `algorithm_version` in `insights` JSON; significant result/version changes are also recorded in append-only `energy_score_revisions`.
 
 
 ## Pagination and errors

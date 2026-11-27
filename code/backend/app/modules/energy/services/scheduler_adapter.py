@@ -5,11 +5,12 @@ This module is the ONLY file in the energy module allowed to import from
 It executes only SELECT queries, always filtered by verified owner (user_id),
 with a bounded, constant number of queries.
 
-Sprint 1 Status & Known Limitations:
-- Task status is always UNSCHEDULED in this sprint; completed is returned as None
+Workload mapping:
+- Task status is always UNSCHEDULED in Sprint 1; completed is returned as None
   for all tasks, representing unknown completion status.
-- Known limitation: A FIXED task and a calendar event covering the same time
-  can both be counted in the total daily workload cognitive demand.
+- FIXED tasks are converted into clipped [day_start, day_end) intervals to be
+  unioned with calendar event intervals so overlapping time is never double-counted.
+- FLEXIBLE tasks stay TaskLoad items (counted when deadline falls in the local day).
 - Titles, locations, and personal text are never read into energy objects.
 """
 
@@ -20,15 +21,25 @@ from zoneinfo import ZoneInfo
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
+from app.modules.energy.algorithms.energy.config import DEFAULT_ENERGY_CONFIG
 from app.modules.energy.algorithms.energy.workload_calculator import TaskLoad
 from app.modules.scheduler.models import Event, Task
 
 
 class TaskLoads(list[TaskLoad]):
-    """List of TaskLoad objects with a truncation flag."""
+    """List of FLEXIBLE TaskLoad objects plus clipped FIXED intervals and metadata."""
 
-    def __init__(self, items: list[TaskLoad] | None = None, *, truncated: bool = False):
+    def __init__(
+        self,
+        items: list[TaskLoad] | None = None,
+        *,
+        fixed_intervals: list[tuple[datetime, datetime]] | None = None,
+        extra_high_priority_tasks: int = 0,
+        truncated: bool = False,
+    ):
         super().__init__(items or [])
+        self.fixed_intervals = fixed_intervals or []
+        self.extra_high_priority_tasks = extra_high_priority_tasks
         self.truncated = truncated
 
 
@@ -49,12 +60,14 @@ def load_task_loads(
     day_end: datetime,
     *,
     limit: int = 500,
+    high_priority_min: int = DEFAULT_ENERGY_CONFIG.high_priority_min,
 ) -> TaskLoads:
-    """Load user's task loads overlapping the local day window.
+    """Load user's tasks overlapping the local day window.
 
-    - FIXED tasks: counted when [fixed_start_at, fixed_end_at) overlaps [day_start, day_end).
-      Effective duration is min(estimated_duration_minutes, minutes of overlap with local day).
-    - FLEXIBLE tasks: counted when deadline falls inside [day_start, day_end).
+    - FIXED tasks overlapping [day_start, day_end) are clipped to [day_start, day_end)
+      and exposed on `fixed_intervals` (not TaskLoad minutes) to union with events;
+      those with priority >= high_priority_min increment `extra_high_priority_tasks`.
+    - FLEXIBLE tasks are returned as TaskLoad items when deadline falls inside [day_start, day_end).
       FLEXIBLE tasks with no deadline are NOT counted.
     - Rows read capped at limit + 1; if exceeded, truncated is set to True.
     """
@@ -91,21 +104,18 @@ def load_task_loads(
     candidates = rows[:limit]
 
     items: list[TaskLoad] = []
+    fixed_intervals: list[tuple[datetime, datetime]] = []
+    extra_high_priority_tasks = 0
+
     for task_type, est_dur, priority, fixed_start, fixed_end, deadline in candidates:
         if task_type == "FIXED":
             if fixed_start is not None and fixed_end is not None:
                 overlap_start = max(fixed_start, day_start)
                 overlap_end = min(fixed_end, day_end)
-                overlap_seconds = max(0.0, (overlap_end - overlap_start).total_seconds())
-                overlap_minutes = int(round(overlap_seconds / 60.0))
-                eff_duration = max(1, min(est_dur, overlap_minutes))
-                items.append(
-                    TaskLoad(
-                        duration_minutes=eff_duration,
-                        priority=priority,
-                        completed=None,
-                    )
-                )
+                if overlap_end > overlap_start:
+                    fixed_intervals.append((overlap_start, overlap_end))
+                    if priority is not None and priority >= high_priority_min:
+                        extra_high_priority_tasks += 1
         elif task_type == "FLEXIBLE":
             if deadline is not None and day_start <= deadline < day_end:
                 items.append(
@@ -116,7 +126,12 @@ def load_task_loads(
                     )
                 )
 
-    return TaskLoads(items, truncated=is_truncated)
+    return TaskLoads(
+        items,
+        fixed_intervals=fixed_intervals,
+        extra_high_priority_tasks=extra_high_priority_tasks,
+        truncated=is_truncated,
+    )
 
 
 def load_event_intervals(
