@@ -718,9 +718,10 @@ def test_statement_count_in_calculate(energy_api, database):
         finally:
             sa.event.remove(database.admin, "before_cursor_execute", before_cursor_execute)
 
-    # 1 sleep + 1 sleep_schedule + 1 tasks + 2 events + 1..2 recovery + 1 upsert
-    # + 2 savepoint (SAVEPOINT/RELEASE) + 1 rev select + 1 rev insert + 1..2 fetch/refresh
-    assert stmt_count <= 14
+    # 3 retention savepoint/delete/release + 1 sleep + 1 sleep_schedule + 1 tasks + 2 events
+    # + 1..2 recovery + 1 upsert + 2 savepoint (SAVEPOINT/RELEASE) + 1 rev select
+    # + 1 rev insert + 1..2 fetch/refresh
+    assert stmt_count <= 17
 
 
 def test_available_minutes_from_sleep_schedule(database, test_users):

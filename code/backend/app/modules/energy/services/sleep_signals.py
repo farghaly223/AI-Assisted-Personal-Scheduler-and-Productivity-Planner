@@ -26,6 +26,7 @@ from app.modules.energy.models import (
     SleepUsageSignal,
 )
 from app.modules.energy.schemas import SignalSyncRequest, SleepEstimateRequest
+from app.modules.energy.services import retention as retention_service
 from app.modules.energy.services.sleep_sessions import _map_integrity_error, _to_session_dict
 
 
@@ -35,30 +36,28 @@ def sync_screen_signals(
     payload: SignalSyncRequest,
     *,
     now: datetime | None = None,
+    retention_config: retention_service.RetentionConfig = retention_service.DEFAULT_RETENTION_CONFIG,
 ) -> dict:
     """Ingest screen usage signals idempotently.
-    
-    Validates timestamps against clock skew and past age using injectable `now`.
+
+    Validates timestamps against clock skew and signal retention age using injectable `now`.
+    Runs opportunistic retention purge inside a savepoint before inserting.
     Deduplicates payload events after converting to UTC.
     Performs a single bulk insert with ON CONFLICT DO NOTHING.
     """
-    if now is None:
-        now = datetime.now(timezone.utc)
-    elif now.tzinfo is None:
-        now = now.replace(tzinfo=timezone.utc)
-    else:
-        now = now.astimezone(timezone.utc)
+    now = retention_service.normalize_utc(now)
 
     future_limit = now + timedelta(minutes=5)
-    past_limit = now - timedelta(days=30)
+    past_limit = now - retention_config.signal_max_age
+    max_age_days = retention_config.signal_max_age.days
 
-    # 1. Validate timestamps: reject in future (>5m clock skew) or older than 30 days
+    # 1. Validate timestamps: reject in future (>5m clock skew) or older than retention window
     for ev in payload.screen_events:
         ts = ev.timestamp
         if ts > future_limit:
             raise APIError(422, "invalid_request", "Timestamp cannot be in the future beyond 5 minutes clock skew")
         if ts < past_limit:
-            raise APIError(422, "invalid_request", "Timestamp cannot be older than 30 days")
+            raise APIError(422, "invalid_request", f"Timestamp cannot be older than {max_age_days} days")
 
     # 2. Deduplicate payload events AFTER converting timestamps to UTC
     unique_events: dict[tuple[str, datetime], None] = {}
@@ -66,11 +65,20 @@ def sync_screen_signals(
         ts_utc = ev.timestamp.astimezone(timezone.utc)
         unique_events[(ev.event_type, ts_utc)] = None
 
+    # 3. Opportunistic retention purge (isolated in savepoint; never breaks sync)
+    retention_service.run_purge_safely(
+        session,
+        retention_service.purge_sleep_usage_signals,
+        user_id,
+        now=now,
+        config=retention_config,
+    )
+
     received = len(payload.screen_events)
     if not unique_events:
         return {"received": received, "inserted": 0, "duplicates": received}
 
-    # 3. Single bulk insert with ON CONFLICT DO NOTHING
+    # 4. Single bulk insert with ON CONFLICT DO NOTHING
     stmt = (
         insert(SleepUsageSignal)
         .values([
@@ -121,29 +129,35 @@ def estimate_sleep_session(
     *,
     now: datetime | None = None,
     config: SleepDetectionConfig = DEFAULT_SLEEP_CONFIG,
+    retention_config: retention_service.RetentionConfig = retention_service.DEFAULT_RETENTION_CONFIG,
 ) -> tuple[int, dict]:
     """Estimate sleep session candidate from device usage signals for target_date.
-    
+
     Returns:
         (status_code, data_dict)
     """
-    if now is None:
-        now = datetime.now(timezone.utc)
-    elif now.tzinfo is None:
-        now = now.replace(tzinfo=timezone.utc)
-    else:
-        now = now.astimezone(timezone.utc)
+    now = retention_service.normalize_utc(now)
 
     tz = ZoneInfo(payload.timezone)
     local_today = now.astimezone(tz).date()
 
-    # 1. Validate estimate target_date: reject (422) if > local today + 1 day or < local today - 30 days
+    # 1. Validate estimate target_date: reject (422) if > local today + 1 day or older than signal retention window
+    max_age_days = retention_config.signal_max_age.days
     if payload.target_date > local_today + timedelta(days=1):
         raise APIError(422, "invalid_request", "target_date cannot be more than 1 day in the future")
-    if payload.target_date < local_today - timedelta(days=30):
-        raise APIError(422, "invalid_request", "target_date cannot be older than 30 days")
+    if payload.target_date < local_today - retention_config.signal_max_age:
+        raise APIError(422, "invalid_request", f"target_date cannot be older than {max_age_days} days")
 
-    # 2. Check if a non-rejected session already exists for that sleep_date
+    # 2. Opportunistic retention purge (isolated in savepoint; never breaks estimation)
+    retention_service.run_purge_safely(
+        session,
+        retention_service.purge_sleep_usage_signals,
+        user_id,
+        now=now,
+        config=retention_config,
+    )
+
+    # 3. Check if a non-rejected session already exists for that sleep_date
     existing_session = _check_existing_session(session, user_id, payload.target_date)
 
     if existing_session is not None:

@@ -11,8 +11,13 @@ from app.core.errors import ERROR_RESPONSES
 from app.modules.energy.schemas import (
     DailySummaryResponse,
     EnergyCalculateRequest,
+    EnergyDataEraseRequest,
+    EnergyDataEraseResponse,
     EnergyExplanationRead,
+    EnergyFeedbackCreate,
+    EnergyFeedbackRead,
     EnergyScoreRead,
+    EnergyScoreRevisionRead,
     Page,
 )
 from app.modules.energy.services import energy as service
@@ -108,3 +113,93 @@ def get_energy_explanation(
     user_id = session.info["user_id"]
     data = service.get_explanation(session, user_id, id)
     return EnergyExplanationRead.model_validate(data)
+
+
+@router.post(
+    "/feedback",
+    response_model=EnergyFeedbackRead,
+    status_code=200,
+    summary="Submit subjective energy feedback",
+    description="Upsert subjective felt energy rating (1-5 strict int) for a target_date that already has a stored energy score with status 'ok'. Returns 404 otherwise.",
+)
+def upsert_energy_feedback(payload: EnergyFeedbackCreate, session: SessionDep):
+    user_id = session.info["user_id"]
+    data = service.upsert_energy_feedback(
+        session,
+        user_id,
+        payload.target_date,
+        payload.felt_energy,
+    )
+    return EnergyFeedbackRead.model_validate(data)
+
+
+@router.get(
+    "/feedback",
+    response_model=Page[EnergyFeedbackRead],
+    summary="List energy feedback history",
+    description="Paginated list of caller's subjective energy feedback entries, newest target_date first. Optional date_from and date_to filters.",
+)
+def list_energy_feedback(
+    session: SessionDep,
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0, le=1000000),
+    date_from: date | None = None,
+    date_to: date | None = None,
+):
+    user_id = session.info["user_id"]
+    data = service.list_energy_feedback(
+        session,
+        user_id,
+        limit=limit,
+        offset=offset,
+        date_from=date_from,
+        date_to=date_to,
+    )
+    return Page[EnergyFeedbackRead](
+        items=[EnergyFeedbackRead.model_validate(item) for item in data["items"]],
+        limit=data["limit"],
+        offset=data["offset"],
+        has_more=data["has_more"],
+    )
+
+
+@router.get(
+    "/revisions",
+    response_model=Page[EnergyScoreRevisionRead],
+    summary="List energy score revisions",
+    description="Paginated list of caller's energy score revisions, newest first. Optional target_date filter.",
+)
+def list_energy_revisions(
+    session: SessionDep,
+    target_date: date | None = None,
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0, le=1000000),
+):
+    user_id = session.info["user_id"]
+    data = service.list_energy_revisions(
+        session,
+        user_id,
+        target_date=target_date,
+        limit=limit,
+        offset=offset,
+    )
+    return Page[EnergyScoreRevisionRead](
+        items=[EnergyScoreRevisionRead.model_validate(item) for item in data["items"]],
+        limit=data["limit"],
+        offset=data["offset"],
+        has_more=data["has_more"],
+    )
+
+
+@router.post(
+    "/data/erase",
+    response_model=EnergyDataEraseResponse,
+    status_code=200,
+    summary="Erase all caller energy data",
+    description="Requires exact confirmation literal DELETE_ENERGY_DATA. Atomically deletes caller rows across all 10 energy tables without touching tasks, events, profiles, or preferences.",
+)
+def erase_energy_data(payload: EnergyDataEraseRequest, session: SessionDep):
+    user_id = session.info["user_id"]
+    data = service.erase_energy_data(session, user_id)
+    return EnergyDataEraseResponse.model_validate(data)
+

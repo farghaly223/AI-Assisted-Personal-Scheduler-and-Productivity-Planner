@@ -57,6 +57,10 @@ Public endpoints: health, register, verify-otp, resend-otp, login, refresh. All 
 | GET | `/energy/history` | `?limit=50&offset=0&status=ok` | 200 Page of EnergyScoreRead; newest target_date first |
 | GET | `/energy/daily-summary` | `?date=2026-11-22&timezone=UTC` | 200 DailySummaryResponse; read-only daily summary |
 | GET | `/energy/explanation/{id}` | UUID path, no body | 200 EnergyExplanationRead; 404 if not found or other user |
+| POST | `/energy/feedback` | `{"target_date":"2026-11-22","felt_energy":4}` | 200 EnergyFeedbackRead; 404 if no `ok` score for date |
+| GET | `/energy/feedback` | `?limit=50&offset=0&date_from=2026-11-01` | 200 Page of EnergyFeedbackRead; newest target_date first |
+| GET | `/energy/revisions` | `?target_date=2026-11-22&limit=50&offset=0` | 200 Page of EnergyScoreRevisionRead; newest first |
+| POST | `/energy/data/erase` | `{"confirm":"DELETE_ENERGY_DATA"}` | 200 `{"deleted":{table:count}}`; idempotent erase of all 10 energy tables |
 
 ## Authentication example
 
@@ -272,7 +276,7 @@ SignalSyncResponse:
 Validation and rules for signals sync:
 - `event_type` is restricted to the privacy whitelist: `SCREEN_INTERACTIVE`, `SCREEN_NON_INTERACTIVE`, `KEYGUARD_SHOWN`, `KEYGUARD_HIDDEN`. All other values or application identifiers are rejected with 422.
 - `screen_events` must contain between 1 and 5000 items. Empty lists or >5000 items are rejected with 422.
-- `timestamp` must be timezone-aware. Timestamps in the future (>5 minutes clock skew) or older than 30 days are rejected with 422.
+- `timestamp` must be timezone-aware. Timestamps in the future (>5 minutes clock skew) or older than 14 days (aligned with the provisional `signal_max_age` retention window) are rejected with 422.
 - Payload events are deduplicated after converting timestamps to UTC so identical instants with different timezone offsets are treated as duplicates.
 - Signals are inserted in a single bulk operation with `ON CONFLICT (user_id, event_type, event_timestamp) DO NOTHING`. Signals are stored with `session_id=null`.
 
@@ -310,7 +314,7 @@ SleepEstimateResponse (created candidate):
 ```
 
 Validation and rules for estimation:
-- `target_date` is the user's local wake-up date. Rejected with 422 if > user's local today + 1 day or older than 30 days.
+- `target_date` is the user's local wake-up date. Rejected with 422 if > user's local today + 1 day or older than 14 days (aligned with the provisional `signal_max_age` retention window).
 - If a non-rejected session already exists for `target_date`, returns 200 with `status="existing"`, `created=false`, and the existing `session`.
 - If device evidence is insufficient for candidate detection, returns 200 with `status="insufficient_data"`, `created=false`, and `session=null`.
 - When a candidate is detected, creates a `SleepSession` (`source='android_usage'`, `status='pending_confirmation'`, `confidence=candidate.confidence_score`, `duration_minutes=candidate.duration_minutes`) and returns 201 with `status="estimated"`, `created=true`.
@@ -504,6 +508,139 @@ Architecture and Scheduler Coupling:
 - WEEKLY events are prefiltered in SQL using recurrence columns and expanded deterministically in the event's timezone with `fold=0` (nonexistent times shift forward; ambiguous times choose first occurrence).
 - Row reading is capped (limit+1). If tasks or events exceed limit, the workload factor is treated as unavailable with insight `WORKLOAD_TRUNCATED`.
 - Upsert into `energy_scores` is idempotent on `(user_id, target_date)` (`DO UPDATE`) and stores `algorithm_version` in `insights` JSON; significant result/version changes are also recorded in append-only `energy_score_revisions`.
+
+## Energy feedback, revisions, retention, and data erasure
+
+### Subjective feedback (`POST /energy/feedback` and `GET /energy/feedback`)
+
+Request (`POST /energy/feedback`):
+```json
+{"target_date":"2026-11-22","felt_energy":4}
+```
+
+Response (`EnergyFeedbackRead`, HTTP 200 for both create and upsert update):
+```json
+{
+  "id": "00000000-0000-4000-8000-000000000001",
+  "target_date": "2026-11-22",
+  "felt_energy": 4,
+  "score_at_feedback": 85.0,
+  "level_at_feedback": "High",
+  "algorithm_version": "energy-algo-2",
+  "created_at": "2026-11-22T12:00:00Z",
+  "updated_at": "2026-11-22T12:00:00Z"
+}
+```
+
+Rules:
+- `felt_energy` must be a strict integer `1..5`; extra fields and `user_id` are rejected with 422.
+- Requires an existing stored `energy_scores` row for `(user_id, target_date)` with `status="ok"`. Missing scores or `status="insufficient_data"` return 404.
+- Idempotently upserts on `(user_id, target_date)`, snapshotting `score_at_feedback`, `level_at_feedback` (Title case in responses), and `algorithm_version` from the stored score.
+- `GET /energy/feedback` returns `Page[EnergyFeedbackRead]` (`limit` 1–100 default 50, `offset` 0–1,000,000, no `COUNT` query), ordered newest `target_date` first, with optional `date_from` and `date_to` filters (422 if `date_to < date_from`).
+
+### Energy score revisions (`GET /energy/revisions`)
+
+Query parameters: optional `target_date`, `limit` (1–100, default 50), `offset` (0–1,000,000). Returns `Page[EnergyScoreRevisionRead]`, newest first:
+```json
+{
+  "items": [
+    {
+      "id": "00000000-0000-4000-8000-000000000001",
+      "target_date": "2026-11-22",
+      "status": "ok",
+      "energy_score": 85.0,
+      "energy_level": "High",
+      "confidence": 0.85,
+      "algorithm_version": "energy-algo-2",
+      "calculated_at": "2026-11-22T10:00:00Z"
+    }
+  ],
+  "limit": 50,
+  "offset": 0,
+  "has_more": false
+}
+```
+When `status == "insufficient_data"`, `energy_score`, `energy_level`, and `confidence` are `null`.
+
+### Energy data erasure (`POST /energy/data/erase`)
+
+Request (`extra='forbid'`, exact literal required, else 422):
+```json
+{"confirm":"DELETE_ENERGY_DATA"}
+```
+
+Response (HTTP 200):
+```json
+{
+  "deleted": {
+    "energy_feedback": 1,
+    "energy_score_revisions": 2,
+    "energy_scores": 1,
+    "recovery_periods": 3,
+    "focus_sessions": 4,
+    "recovery_strategies": 1,
+    "sleep_quality_ratings": 1,
+    "sleep_usage_signals": 12,
+    "sleep_sessions": 1,
+    "sleep_schedules": 1
+  }
+}
+```
+
+Rules and client obligations:
+- Deletes only the caller's rows across all 10 energy tables in FK-safe order inside one transaction, and is idempotent (a second call returns `0` for every table).
+- Never deletes `tasks`, `events`, `profiles`, or `user_preferences`.
+- Account deletion already cascades automatically through `auth.users` → `public.profiles` → all 10 energy tables (`ON DELETE CASCADE`).
+- **Mobile client requirement**: after calling `POST /energy/data/erase`, the mobile app must cancel any scheduled local alarms/reminders (bedtime/wake alarms) and clear locally cached sleep/energy data.
+
+### Opportunistic retention rules (PROVISIONAL)
+
+Configured in `app/modules/energy/services/retention.py` (`RetentionConfig`, **PROVISIONAL**):
+- **`sleep_usage_signals`** (runs inside a savepoint at the start of `POST /energy/sleep/signals/sync` and `POST /energy/sleep/estimate`, deleting at most `20,000` caller rows per call):
+  - **(a)** `event_timestamp < now - 14 days` (`signal_max_age = 14 days`, also enforced as the 422 lower bound on sync timestamps and estimate `target_date`), OR
+  - **(b)** linked via `(user_id, session_id)` to a `sleep_sessions` row with `status IN ('confirmed', 'rejected')` and `updated_at < now - 48 hours` (`linked_signal_max_age = 48 hours`).
+- **`energy_score_revisions`** (runs inside a savepoint at `POST /energy/calculate`):
+  - deletes caller revisions with `calculated_at < now - 90 days` (`revision_max_age = 90 days`, bounded to `20,000` rows per call).
+- Housekeeping failures inside the savepoint log only the exception class name at `WARNING` level and never abort the main request.
+
+#### OPTIONAL global purge (`pg_cron` / SQL — ADMIN-ONLY, NOT APPLIED)
+
+> [!NOTE]
+> **ADMIN-ONLY — OPTIONAL — NOT APPLIED**: Do not put this snippet in application runtime code or Alembic migrations. If an administrator enables `pg_cron` in Postgres for global cross-user cleanup, it implements the exact same rules `(a)` and `(b)` (plus the 90-day revision purge):
+
+```sql
+-- ADMIN-ONLY — OPTIONAL — NOT APPLIED
+SELECT cron.schedule(
+    'energy_retention_purge_daily',
+    '0 3 * * *',
+    $$
+    DELETE FROM public.sleep_usage_signals AS sig
+    WHERE sig.id IN (
+        SELECT s.id
+        FROM public.sleep_usage_signals AS s
+        LEFT JOIN public.sleep_sessions AS sess
+            ON sess.user_id = s.user_id AND sess.id = s.session_id
+        WHERE s.event_timestamp < now() - interval '14 days'
+           OR (
+               sess.user_id = s.user_id
+               AND sess.status IN ('confirmed', 'rejected')
+               AND sess.updated_at < now() - interval '48 hours'
+           )
+        ORDER BY s.event_timestamp ASC, s.id ASC
+        LIMIT 20000
+    );
+
+    DELETE FROM public.energy_score_revisions AS rev
+    WHERE rev.id IN (
+        SELECT r.id
+        FROM public.energy_score_revisions AS r
+        WHERE r.calculated_at < now() - interval '90 days'
+        ORDER BY r.calculated_at ASC, r.id ASC
+        LIMIT 20000
+    );
+    $$
+);
+```
 
 
 ## Pagination and errors

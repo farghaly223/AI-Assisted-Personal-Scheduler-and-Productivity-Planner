@@ -129,8 +129,8 @@ def test_signals_sync_validations(energy_api):
     )
     assert res_future.status_code == 422
 
-    # 6. Timestamp older than 30 days -> 422
-    old_ts = (now_utc - timedelta(days=31)).isoformat()
+    # 6. Timestamp older than retention window (14 days) -> 422
+    old_ts = (now_utc - timedelta(days=15)).isoformat()
     res_old = energy_api.client.post(
         "/api/v1/energy/sleep/signals/sync",
         headers=energy_api.headers,
@@ -145,7 +145,7 @@ def test_signals_sync_validations(energy_api):
 
 
 def test_signals_sync_sql_statement_count_is_constant(energy_api):
-    """Assert sync issues a constant number of SQL statements for 1 event and for 50 events."""
+    """Assert sync issues a constant number of SQL statements for 1 event and for 5000 events."""
     now_utc = datetime.now(timezone.utc)
 
     # 1 event payload
@@ -156,25 +156,29 @@ def test_signals_sync_sql_statement_count_is_constant(energy_api):
         ],
     }
 
-    # 50 events payload
-    p50 = {
+    # 5000 events payload (maximum allowed batch size)
+    p5000 = {
         "timezone": "UTC",
         "screen_events": [
             {"event_type": "SCREEN_NON_INTERACTIVE", "timestamp": (now_utc - timedelta(hours=16, minutes=i)).isoformat()}
-            for i in range(50)
+            for i in range(5000)
         ],
     }
 
-    queries_1 = []
-    queries_50 = []
+    all_queries_1 = []
+    all_queries_5000 = []
+    signal_queries_1 = []
+    signal_queries_5000 = []
 
     def capture_1(conn, cursor, statement, parameters, context, executemany):
+        all_queries_1.append(statement)
         if "sleep_usage_signals" in statement.lower():
-            queries_1.append(statement)
+            signal_queries_1.append(statement)
 
-    def capture_50(conn, cursor, statement, parameters, context, executemany):
+    def capture_5000(conn, cursor, statement, parameters, context, executemany):
+        all_queries_5000.append(statement)
         if "sleep_usage_signals" in statement.lower():
-            queries_50.append(statement)
+            signal_queries_5000.append(statement)
 
     # Measure 1 event
     event.listen(energy_api.database.runtime.engine, "before_cursor_execute", capture_1)
@@ -184,17 +188,19 @@ def test_signals_sync_sql_statement_count_is_constant(energy_api):
     finally:
         event.remove(energy_api.database.runtime.engine, "before_cursor_execute", capture_1)
 
-    # Measure 50 events
-    event.listen(energy_api.database.runtime.engine, "before_cursor_execute", capture_50)
+    # Measure 5000 events
+    event.listen(energy_api.database.runtime.engine, "before_cursor_execute", capture_5000)
     try:
-        res50 = energy_api.client.post("/api/v1/energy/sleep/signals/sync", headers=energy_api.headers, json=p50)
-        assert res50.status_code == 200
+        res5000 = energy_api.client.post("/api/v1/energy/sleep/signals/sync", headers=energy_api.headers, json=p5000)
+        assert res5000.status_code == 200
+        assert res5000.json() == {"received": 5000, "inserted": 5000, "duplicates": 0}
     finally:
-        event.remove(energy_api.database.runtime.engine, "before_cursor_execute", capture_50)
+        event.remove(energy_api.database.runtime.engine, "before_cursor_execute", capture_5000)
 
-    # Both must issue exactly 1 insert statement for sleep_usage_signals
-    assert len(queries_1) == 1
-    assert len(queries_50) == 1
+    # Both must issue constant SQL statements (1 bounded purge DELETE + 1 bulk INSERT on sleep_usage_signals)
+    assert len(signal_queries_1) == 2
+    assert len(signal_queries_5000) == 2
+    assert len(all_queries_1) == len(all_queries_5000)
 
 
 def test_estimate_full_night_africa_cairo_and_signal_linking(energy_api):
@@ -297,8 +303,8 @@ def test_estimate_target_date_validation(energy_api):
     )
     assert res_future.status_code == 422
 
-    # Older than 30 days -> 422
-    past_date = (local_today - timedelta(days=31)).isoformat()
+    # Older than 14 days (aligned with signal_max_age) -> 422
+    past_date = (local_today - timedelta(days=15)).isoformat()
     res_past = energy_api.client.post(
         "/api/v1/energy/sleep/estimate",
         headers=energy_api.headers,

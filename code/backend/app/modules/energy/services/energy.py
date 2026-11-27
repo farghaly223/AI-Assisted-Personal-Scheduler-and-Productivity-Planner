@@ -32,12 +32,18 @@ from app.modules.energy.algorithms.energy.energy_calculator import (
 from app.modules.energy.algorithms.energy.workload_calculator import calculate_workload
 from app.modules.energy.algorithms.sleep.sleep_quality import normalize_sleep_quality
 from app.modules.energy.models import (
+    EnergyFeedback,
     EnergyScore,
     EnergyScoreRevision,
+    FocusSession,
+    RecoveryPeriod,
+    RecoveryStrategy,
     SleepQualityRating,
     SleepSchedule,
     SleepSession,
+    SleepUsageSignal,
 )
+from app.modules.energy.services import retention as retention_service
 from app.modules.energy.services.recovery import (
     compute_recovery_for_day,
     get_local_day_bounds,
@@ -94,17 +100,24 @@ def to_energy_score_dict(row: EnergyScore) -> dict:
     }
 
 
+def _extract_algorithm_version(insights_json: dict | list | None) -> str | None:
+    if not isinstance(insights_json, dict):
+        return None
+    raw_ver = insights_json.get("algorithm_version")
+    if isinstance(raw_ver, str):
+        cleaned = raw_ver.strip()
+        if cleaned:
+            return cleaned[:40]
+    return None
+
+
 def to_energy_explanation_dict(row: EnergyScore) -> dict:
     """Format an EnergyScore model row into the explanation response dictionary."""
     base = to_energy_score_dict(row)
     insights_json = row.insights or {}
     components: list[dict] = []
-    algorithm_version: str | None = None
     if isinstance(insights_json, dict):
         components = insights_json.get("components", [])
-        raw_ver = insights_json.get("algorithm_version")
-        if isinstance(raw_ver, str):
-            algorithm_version = raw_ver
 
     confidence_breakdown = {
         "overall_confidence": base["confidence"],
@@ -113,7 +126,7 @@ def to_energy_explanation_dict(row: EnergyScore) -> dict:
 
     base["components"] = components
     base["confidence_breakdown"] = confidence_breakdown
-    base["algorithm_version"] = algorithm_version
+    base["algorithm_version"] = _extract_algorithm_version(insights_json)
     return base
 
 
@@ -247,27 +260,24 @@ def calculate_energy_for_date(
     timezone_name: str,
     *,
     now: datetime | None = None,
+    retention_config: retention_service.RetentionConfig = retention_service.DEFAULT_RETENTION_CONFIG,
 ) -> dict:
     """Calculate daily energy score and idempotently persist in energy_scores.
 
     1. Validates target_date bounds against user's local today (today - 366d <= target_date <= today + 1d).
-    2. Loads sleep session for sleep_date == target_date.
-    3. Loads tasks and events via scheduler adapter and runs calculate_workload.
-    4. Computes recovery via compute_recovery_for_day (read-only, no writes).
-    5. Calculates energy score using calculate_energy.
-    6. Upserts into energy_scores table (ON CONFLICT (user_id, target_date) DO UPDATE).
+    2. Runs opportunistic retention purge on old energy_score_revisions inside a savepoint.
+    3. Loads sleep session for sleep_date == target_date.
+    4. Loads tasks and events via scheduler adapter and runs calculate_workload.
+    5. Computes recovery via compute_recovery_for_day (read-only, no writes).
+    6. Calculates energy score using calculate_energy.
+    7. Upserts into energy_scores table (ON CONFLICT (user_id, target_date) DO UPDATE).
     """
     try:
         valid_zone = validate_timezone_name(timezone_name)
     except ValueError as exc:
         raise APIError(422, "invalid_request", str(exc)) from exc
 
-    if now is None:
-        now_utc = datetime.now(timezone.utc)
-    elif now.tzinfo is None:
-        now_utc = now.replace(tzinfo=timezone.utc)
-    else:
-        now_utc = now.astimezone(timezone.utc)
+    now_utc = retention_service.normalize_utc(now)
 
     tz = ZoneInfo(valid_zone)
     local_today = now_utc.astimezone(tz).date()
@@ -276,6 +286,14 @@ def calculate_energy_for_date(
         raise APIError(422, "invalid_request", "target_date cannot be in the future beyond tomorrow")
     if target_date < local_today - timedelta(days=366):
         raise APIError(422, "invalid_request", "target_date cannot be older than 366 days")
+
+    retention_service.run_purge_safely(
+        session,
+        retention_service.purge_energy_score_revisions,
+        user_id,
+        now=now_utc,
+        config=retention_config,
+    )
 
     # (1) Sleep factor
     sleep_stmt = (
@@ -676,3 +694,181 @@ def get_daily_summary(
         "workload": workload_summary,
         "recovery": recovery_summary,
     }
+
+
+ERASE_MODEL_ORDER = (
+    EnergyFeedback,
+    EnergyScoreRevision,
+    EnergyScore,
+    RecoveryPeriod,
+    FocusSession,
+    RecoveryStrategy,
+    SleepQualityRating,
+    SleepUsageSignal,
+    SleepSession,
+    SleepSchedule,
+)
+
+
+def _to_energy_feedback_dict(row: EnergyFeedback) -> dict:
+    return {
+        "id": row.id,
+        "target_date": row.target_date,
+        "felt_energy": row.felt_energy,
+        "score_at_feedback": float(row.score_at_feedback) if row.score_at_feedback is not None else None,
+        "level_at_feedback": row.level_at_feedback.title() if row.level_at_feedback else None,
+        "algorithm_version": row.algorithm_version,
+        "created_at": row.created_at,
+        "updated_at": row.updated_at,
+    }
+
+
+def _to_energy_revision_dict(row: EnergyScoreRevision) -> dict:
+    is_insufficient = row.status == "insufficient_data"
+    return {
+        "id": row.id,
+        "target_date": row.target_date,
+        "status": row.status,
+        "energy_score": None if is_insufficient else (float(row.score) if row.score is not None else None),
+        "energy_level": None if is_insufficient else (row.energy_level.title() if row.energy_level else None),
+        "confidence": None if is_insufficient else (float(row.confidence) if row.confidence is not None else None),
+        "algorithm_version": row.algorithm_version,
+        "calculated_at": row.calculated_at,
+    }
+
+
+def erase_energy_data(session: Session, user_id: UUID) -> dict:
+    """Delete all caller-owned rows across the 10 energy tables in FK-safe order within one transaction."""
+    deleted: dict[str, int] = {}
+    for model in ERASE_MODEL_ORDER:
+        result = session.execute(
+            sa.delete(model)
+            .where(model.user_id == user_id)
+            .execution_options(synchronize_session=False)
+        )
+        deleted[model.__tablename__] = int(result.rowcount or 0)
+    session.flush()
+    return {"deleted": deleted}
+
+
+def upsert_energy_feedback(
+    session: Session,
+    user_id: UUID,
+    target_date: date,
+    felt_energy: int,
+) -> dict:
+    """Create or update subjective energy feedback for a date with an existing 'ok' energy score."""
+    score_row = session.scalar(
+        sa.select(EnergyScore).where(
+            EnergyScore.user_id == user_id,
+            EnergyScore.target_date == target_date,
+            EnergyScore.status == "ok",
+        )
+    )
+    if score_row is None:
+        raise APIError(404, "not_found", "Calculated energy score not found for target_date")
+
+    algorithm_version = _extract_algorithm_version(score_row.insights)
+    stmt = (
+        insert(EnergyFeedback)
+        .values(
+            user_id=user_id,
+            target_date=target_date,
+            felt_energy=felt_energy,
+            score_at_feedback=score_row.score,
+            level_at_feedback=score_row.energy_level,
+            algorithm_version=algorithm_version,
+        )
+        .on_conflict_do_update(
+            constraint="uq_energy_feedback_user_target_date",
+            set_={
+                "felt_energy": felt_energy,
+                "score_at_feedback": score_row.score,
+                "level_at_feedback": score_row.energy_level,
+                "algorithm_version": algorithm_version,
+            },
+        )
+        .returning(EnergyFeedback.id)
+    )
+    feedback_id = session.scalar(stmt)
+    session.flush()
+
+    row = session.scalar(
+        sa.select(EnergyFeedback).where(
+            EnergyFeedback.id == feedback_id,
+            EnergyFeedback.user_id == user_id,
+        )
+    )
+    session.refresh(row)
+    return _to_energy_feedback_dict(row)
+
+
+def list_energy_feedback(
+    session: Session,
+    user_id: UUID,
+    *,
+    limit: int = 50,
+    offset: int = 0,
+    date_from: date | None = None,
+    date_to: date | None = None,
+) -> dict:
+    """List caller's subjective energy feedback entries, newest target_date first."""
+    if date_from and date_to and date_to < date_from:
+        raise APIError(422, "invalid_request", "date_to cannot precede date_from")
+
+    query = sa.select(EnergyFeedback).where(EnergyFeedback.user_id == user_id)
+    if date_from is not None:
+        query = query.where(EnergyFeedback.target_date >= date_from)
+    if date_to is not None:
+        query = query.where(EnergyFeedback.target_date <= date_to)
+
+    query = (
+        query.order_by(
+            EnergyFeedback.target_date.desc(),
+            EnergyFeedback.updated_at.desc(),
+            EnergyFeedback.id.desc(),
+        )
+        .limit(limit + 1)
+        .offset(offset)
+    )
+    rows = session.scalars(query).all()
+    items = [_to_energy_feedback_dict(row) for row in rows[:limit]]
+    return {
+        "items": items,
+        "limit": limit,
+        "offset": offset,
+        "has_more": len(rows) > limit,
+    }
+
+
+def list_energy_revisions(
+    session: Session,
+    user_id: UUID,
+    *,
+    target_date: date | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> dict:
+    """List caller's energy score revisions, newest first, optionally filtered by target_date."""
+    query = sa.select(EnergyScoreRevision).where(EnergyScoreRevision.user_id == user_id)
+    if target_date is not None:
+        query = query.where(EnergyScoreRevision.target_date == target_date)
+
+    query = (
+        query.order_by(
+            EnergyScoreRevision.target_date.desc(),
+            EnergyScoreRevision.calculated_at.desc(),
+            EnergyScoreRevision.id.desc(),
+        )
+        .limit(limit + 1)
+        .offset(offset)
+    )
+    rows = session.scalars(query).all()
+    items = [_to_energy_revision_dict(row) for row in rows[:limit]]
+    return {
+        "items": items,
+        "limit": limit,
+        "offset": offset,
+        "has_more": len(rows) > limit,
+    }
+

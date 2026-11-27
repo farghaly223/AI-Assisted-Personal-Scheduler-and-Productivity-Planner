@@ -4,7 +4,7 @@ from datetime import date as dt_date, datetime, time, timezone
 from typing import Annotated, Generic, Literal, TypeVar
 from uuid import UUID
 
-from pydantic import AfterValidator, Field, field_validator, model_validator
+from pydantic import AfterValidator, BeforeValidator, Field, field_validator, model_validator
 
 from app.core.schemas import Contract, WallTime, ZoneName
 from app.modules.energy.algorithms.recovery.recovery_planner import StrategyParams
@@ -427,6 +427,54 @@ class DailySummaryResponse(Contract):
     sleep: SleepDaySummary | None = None
     workload: WorkloadDaySummary
     recovery: RecoverySummaryResponse
+
+
+# --- Feedback, Revisions & Data Erase Schemas ---
+
+def _reject_numeric_date(value: object) -> object:
+    if isinstance(value, (int, float, bool)):
+        raise ValueError("Date must be an ISO YYYY-MM-DD string")
+    return value
+
+
+StrictDate = Annotated[dt_date, BeforeValidator(_reject_numeric_date)]
+FeltEnergyValue = Annotated[int, Field(strict=True, ge=1, le=5)]
+
+
+class EnergyDataEraseRequest(Contract):
+    confirm: Literal["DELETE_ENERGY_DATA"]
+
+
+class EnergyDataEraseResponse(Contract):
+    deleted: dict[str, int]
+
+
+class EnergyFeedbackCreate(Contract):
+    target_date: StrictDate
+    felt_energy: FeltEnergyValue
+
+
+class EnergyFeedbackRead(Contract):
+    id: UUID
+    target_date: dt_date
+    felt_energy: int
+    score_at_feedback: float | None = None
+    level_at_feedback: Literal["Low", "Medium", "High"] | None = None
+    algorithm_version: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class EnergyScoreRevisionRead(Contract):
+    id: UUID
+    target_date: dt_date
+    status: Literal["ok", "insufficient_data"]
+    energy_score: float | None = None
+    energy_level: Literal["Low", "Medium", "High"] | None = None
+    confidence: float | None = None
+    algorithm_version: str
+    calculated_at: datetime
+
 
 
 
